@@ -60,7 +60,7 @@ await build({
     "@hasna/attachments",
   ],
   define: {
-    "process.env.CODERS_VERSION": '"0.0.5"',
+    "process.env.CODERS_VERSION": '"0.0.6"',
     "process.env.CODERS_BUILD_TIME": `"${new Date().toISOString()}"`,
   },
   logLevel: "info",

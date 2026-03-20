@@ -157,6 +157,11 @@ function toolSummary(name: string, input: Record<string, unknown>): string {
 
 // ── Components ─────────────────────────────────────────────────────
 
+function SpinnerDot() {
+  const f = useSpinner(true);
+  return <Text color="cyan">{f}</Text>;
+}
+
 function Header({ model, mode }: { model: string; mode: string }) {
   return (
     <Box marginBottom={1}>
@@ -168,25 +173,105 @@ function Header({ model, mode }: { model: string; mode: string }) {
 
 function ToolItem({ tool }: { tool: ToolDisplay }) {
   const f = useSpinner(tool.status === "running");
-  const icon = tool.status === "running" ? f
-    : tool.status === "error" ? "✗" : "✓";
+  // Claude Code style: ● for tool calls, · for running status
+  const icon = tool.status === "running" ? "·"
+    : tool.status === "error" ? "●" : "●";
   const color = tool.status === "running" ? "yellow"
     : tool.status === "error" ? "red" : "green";
 
+  // Format: ● ToolName(summary)
+  const toolArgs = tool.summary ? `(${tool.summary.slice(0, 70)})` : "";
+
+  // Format result for display
+  const resultPreview = tool.result && tool.status === "done"
+    ? formatToolResult(tool.name, tool.result)
+    : null;
+
   return (
     <Box flexDirection="column">
+      {/* Tool call header: ● Bash(echo hello) */}
       <Box>
-        <Text dimColor>  {CONN} </Text>
-        <Text color={color}>{icon} </Text>
+        <Text color={color}>{tool.status === "running" ? f : icon} </Text>
         <Text bold>{tool.name}</Text>
-        {tool.summary && <Text dimColor> {tool.summary.slice(0, 60)}</Text>}
+        <Text dimColor>{toolArgs}</Text>
         {tool.durationMs != null && <Text dimColor> ({(tool.durationMs / 1000).toFixed(1)}s)</Text>}
       </Box>
+      {/* Result with ⎿ connector */}
+      {tool.status === "done" && resultPreview && (
+        <Box flexDirection="column">
+          {resultPreview.map((line, i) => (
+            <Box key={i}>
+              <Text dimColor>  {CONN} </Text>
+              <Text>{line}</Text>
+            </Box>
+          ))}
+        </Box>
+      )}
+      {/* Error with ⎿ connector */}
       {tool.error && (
-        <Box><Text dimColor>     {CONN} </Text><Text color="red">{tool.error.slice(0, 150)}</Text></Box>
+        <Box><Text dimColor>  {CONN} </Text><Text color="red">{tool.error.slice(0, 200)}</Text></Box>
       )}
     </Box>
   );
+}
+
+/** Format tool result for Claude Code-style display */
+function formatToolResult(toolName: string, result: string): string[] {
+  const lines: string[] = [];
+  if (!result || result === "(no output)") {
+    lines.push("Done");
+    return lines;
+  }
+  switch (toolName) {
+    case "Bash": {
+      const preview = result.split("\n").slice(0, 5);
+      lines.push(...preview);
+      const total = result.split("\n").length;
+      if (total > 5) lines.push(`… +${total - 5} lines (ctrl+o to expand)`);
+      break;
+    }
+    case "Read": {
+      const numLines = result.split("\n").length;
+      lines.push(`Read ${numLines} lines`);
+      break;
+    }
+    case "Edit": {
+      if (result.includes("Successfully edited")) lines.push(result.split("\n")[0]);
+      else lines.push(result.slice(0, 100));
+      break;
+    }
+    case "Write": {
+      if (result.includes("Created") || result.includes("Updated")) lines.push(result.split("\n")[0]);
+      else lines.push(result.slice(0, 100));
+      break;
+    }
+    case "Glob": {
+      const files = result.split("\n").filter(l => l.trim());
+      lines.push(`Found ${files.length} files`);
+      if (files.length > 0 && files.length <= 3) lines.push(...files);
+      else if (files.length > 3) {
+        lines.push(...files.slice(0, 3));
+        lines.push(`… +${files.length - 3} more files`);
+      }
+      break;
+    }
+    case "Grep": {
+      const matches = result.split("\n").filter(l => l.trim());
+      if (result.includes("No matches")) lines.push("No matches found");
+      else {
+        lines.push(`${matches.length} matches`);
+        if (matches.length <= 3) lines.push(...matches);
+        else {
+          lines.push(...matches.slice(0, 3));
+          lines.push(`… +${matches.length - 3} more`);
+        }
+      }
+      break;
+    }
+    default:
+      lines.push(result.slice(0, 100));
+  }
+  return lines;
 }
 
 function MessageView({ msg }: { msg: ChatMessage }) {
@@ -196,13 +281,23 @@ function MessageView({ msg }: { msg: ChatMessage }) {
   if (msg.role === "system") {
     return <Box marginTop={1}><Text dimColor>{msg.content}</Text></Box>;
   }
+  // Assistant — show text with bullet, then tools, then duration
   return (
-    <Box flexDirection="column" marginTop={1}>
-      {msg.thinking && <Box><Text dimColor italic>thinking...</Text></Box>}
-      {msg.content && <Text>{msg.content}</Text>}
+    <Box flexDirection="column" marginTop={0}>
+      {/* Tool calls first (shown as they happen) */}
       {msg.tools?.map((t) => <ToolItem key={t.id} tool={t} />)}
-      {msg.durationMs != null && msg.durationMs > 2000 && (
-        <Box marginTop={1}>
+      {/* Then the text response with ● prefix */}
+      {msg.content && msg.content !== "(no response)" && (
+        <Box flexDirection="column">
+          <Box>
+            <Text color="green">● </Text>
+            <Text>{msg.content}</Text>
+          </Box>
+        </Box>
+      )}
+      {/* Duration at bottom */}
+      {msg.durationMs != null && msg.durationMs > 1000 && (
+        <Box>
           <Text dimColor>{VERBS[Math.floor(Math.random() * VERBS.length)]} for {fmtDur(msg.durationMs)}</Text>
         </Box>
       )}
@@ -393,19 +488,26 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {visible.map((m) => <MessageView key={m.id} msg={m} />)}
 
-        {/* Live tool progress */}
-        {busy && activeTools.filter((t) => t.status === "running").map((t) => (
-          <ToolItem key={t.id} tool={t} />
-        ))}
+        {/* Live tool progress — show ALL tools (done + running) */}
+        {busy && activeTools.length > 0 && (
+          <Box flexDirection="column">
+            {activeTools.map((t) => <ToolItem key={t.id} tool={t} />)}
+          </Box>
+        )}
 
-        {/* Streaming text */}
-        {busy && streaming && <Box marginTop={1}><Text>{streaming}</Text></Box>}
+        {/* Streaming text — show with ● prefix like Claude Code */}
+        {busy && streaming && (
+          <Box marginTop={0}>
+            <Text color="green">● </Text>
+            <Text>{streaming}</Text>
+          </Box>
+        )}
 
-        {/* Thinking spinner */}
-        {busy && !streaming && activeTools.length === 0 && !permissionPending && (
-          <Box marginTop={1}>
-            <Text color="cyan">{FRAMES[0]} </Text>
-            <Text dimColor>Thinking...</Text>
+        {/* Thinking/working spinner with elapsed time */}
+        {busy && !streaming && !permissionPending && (
+          <Box marginTop={0}>
+            <SpinnerDot />
+            <Text dimColor> {activeTools.some(t => t.status === "running") ? "Working" : "Thinking"}...</Text>
           </Box>
         )}
 
