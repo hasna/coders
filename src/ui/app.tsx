@@ -208,63 +208,37 @@ function ToolItem({ tool }: { tool: ToolDisplay }) {
   );
 }
 
-/** Format tool result for Claude Code-style display */
+/** Format tool result — ultra-compact, 1 line like Claude Code */
 function formatToolResult(toolName: string, result: string): string[] {
-  const lines: string[] = [];
-  if (!result || result === "(no output)") {
-    lines.push("Done");
-    return lines;
-  }
+  if (!result || result === "(no output)") return ["Done"];
+  const totalLines = result.split("\n").length;
+
   switch (toolName) {
     case "Bash": {
-      const preview = result.split("\n").slice(0, 5);
-      lines.push(...preview);
-      const total = result.split("\n").length;
-      if (total > 5) lines.push(`… +${total - 5} lines (ctrl+o to expand)`);
-      break;
+      // Show exit status or first meaningful line
+      if (result.includes("Exit code:")) return [result.split("\n").find(l => l.includes("Exit code:")) ?? "Done"];
+      const firstLine = result.split("\n").find(l => l.trim()) ?? "Done";
+      if (totalLines > 1) return [`${firstLine.slice(0, 80)}… +${totalLines - 1} lines`];
+      return [firstLine.slice(0, 100)];
     }
-    case "Read": {
-      const numLines = result.split("\n").length;
-      lines.push(`Read ${numLines} lines`);
-      break;
-    }
-    case "Edit": {
-      if (result.includes("Successfully edited")) lines.push(result.split("\n")[0]);
-      else lines.push(result.slice(0, 100));
-      break;
-    }
-    case "Write": {
-      if (result.includes("Created") || result.includes("Updated")) lines.push(result.split("\n")[0]);
-      else lines.push(result.slice(0, 100));
-      break;
-    }
-    case "Glob": {
-      const files = result.split("\n").filter(l => l.trim());
-      lines.push(`Found ${files.length} files`);
-      if (files.length > 0 && files.length <= 3) lines.push(...files);
-      else if (files.length > 3) {
-        lines.push(...files.slice(0, 3));
-        lines.push(`… +${files.length - 3} more files`);
-      }
-      break;
-    }
-    case "Grep": {
-      const matches = result.split("\n").filter(l => l.trim());
-      if (result.includes("No matches")) lines.push("No matches found");
-      else {
-        lines.push(`${matches.length} matches`);
-        if (matches.length <= 3) lines.push(...matches);
-        else {
-          lines.push(...matches.slice(0, 3));
-          lines.push(`… +${matches.length - 3} more`);
-        }
-      }
-      break;
-    }
+    case "Read":
+      return [`Read ${totalLines} lines`];
+    case "Edit":
+      // "Successfully edited path (1 replacement)" or "Added N lines"
+      if (result.includes("Successfully")) return [result.split("\n")[0].slice(0, 100)];
+      if (result.includes("replacement")) return [result.split("\n")[0].slice(0, 100)];
+      return [`Edited (${totalLines} lines changed)`];
+    case "Write":
+      // "Created path (N bytes)" or "Updated path (N bytes)"
+      return [result.split("\n")[0].slice(0, 100)];
+    case "Glob":
+      return [`Found ${result.split("\n").filter(l => l.trim()).length} files`];
+    case "Grep":
+      if (result.includes("No matches")) return ["No matches found"];
+      return [`${result.split("\n").filter(l => l.trim()).length} matches`];
     default:
-      lines.push(result.slice(0, 100));
+      return [result.split("\n")[0]?.slice(0, 80) ?? "Done"];
   }
-  return lines;
 }
 
 function MessageView({ msg }: { msg: ChatMessage }) {
@@ -408,10 +382,18 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
           permissionContext: permCtx,
           maxTurns: 10,
           onTextDelta: (text) => {
-            setStreaming((prev) => prev + text);
+            // Only show streaming when NO tools are active
+            // When tools are running, text is usually code being generated
+            // which should not be shown raw in the terminal
+            if (activeToolsRef.current.length === 0 || activeToolsRef.current.every(t => t.status === "done" || t.status === "error")) {
+              setStreaming((prev) => prev + text);
+            }
+            // If tools are active, skip showing the text — it's tool-related content
           },
           onThinkingDelta: () => {},
           onToolUseStart: (name, id, toolInput) => {
+            // Clear streaming when a tool starts — switch to tool display mode
+            setStreaming("");
             onToolStart(id, name, toolSummary(name, toolInput));
           },
           onToolUseEnd: (name, id, toolResult) => {

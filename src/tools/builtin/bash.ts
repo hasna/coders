@@ -299,6 +299,9 @@ export const bashTool: Tool<BashInput, BashOutput> = {
   },
 
   async call(input, context): Promise<ToolCallResult<BashOutput>> {
+    if (!input.command || typeof input.command !== "string") {
+      return { data: { stdout: "", stderr: "Error: command is required", exitCode: 1, interrupted: false, durationMs: 0 } };
+    }
     const { command, timeout, run_in_background } = input;
     const timeoutMs = timeout ?? getDefaultTimeout();
     const startTime = performance.now();
