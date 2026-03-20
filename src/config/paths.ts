@@ -22,7 +22,6 @@ import { existsSync, mkdirSync } from "fs";
 
 const CONFIG_DIR_ENV = "CODERS_CONFIG_DIR";
 const DEFAULT_CONFIG_DIR_NAME = ".coders";
-const COMPAT_CONFIG_DIR_NAME = ".claude";
 
 // ── User config directory ──────────────────────────────────────────
 
@@ -48,14 +47,7 @@ export function getConfigDir(): string {
     return _configDir;
   }
 
-  // 3. Compat: fall back to ~/.claude if it exists and ~/.coders doesn't
-  const compat = join(home, COMPAT_CONFIG_DIR_NAME);
-  if (existsSync(compat)) {
-    _configDir = compat;
-    return _configDir;
-  }
-
-  // 4. Create ~/.coders
+  // Create ~/.coders
   ensureDir(primary);
   _configDir = primary;
   return _configDir;
@@ -132,14 +124,7 @@ export function getProjectConfigDir(projectRoot: string): string {
 }
 
 export function getProjectSettingsPath(projectRoot: string): string {
-  // Check .coders/settings.json first, then .claude/settings.json for compat
-  const primary = join(projectRoot, ".coders", "settings.json");
-  if (existsSync(primary)) return primary;
-
-  const compat = join(projectRoot, ".claude", "settings.json");
-  if (existsSync(compat)) return compat;
-
-  return primary; // default to .coders even if doesn't exist
+  return join(projectRoot, ".coders", "settings.json");
 }
 
 export function getProjectMcpConfigPath(projectRoot: string): string {
@@ -147,35 +132,16 @@ export function getProjectMcpConfigPath(projectRoot: string): string {
 }
 
 export function getProjectAgentsDir(projectRoot: string): string {
-  // Check .coders/agents first, then .claude/agents for compat
-  const primary = join(projectRoot, ".coders", "agents");
-  if (existsSync(primary)) return primary;
-
-  const compat = join(projectRoot, ".claude", "agents");
-  if (existsSync(compat)) return compat;
-
-  return primary;
+  return join(projectRoot, ".coders", "agents");
 }
 
 export function getProjectSkillsDir(projectRoot: string): string {
-  const primary = join(projectRoot, ".coders", "skills");
-  if (existsSync(primary)) return primary;
-
-  const compat = join(projectRoot, ".claude", "skills");
-  if (existsSync(compat)) return compat;
-
-  return primary;
+  return join(projectRoot, ".coders", "skills");
 }
 
 export function getInstructionsFilePath(projectRoot: string): string | null {
-  // CODERS.md first, then CLAUDE.md for compat
-  const primary = join(projectRoot, "CODERS.md");
-  if (existsSync(primary)) return primary;
-
-  const compat = join(projectRoot, "CLAUDE.md");
-  if (existsSync(compat)) return compat;
-
-  return null;
+  const path = join(projectRoot, "CODERS.md");
+  return existsSync(path) ? path : null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ export {
   removeApiKey,
   saveOAuthTokens,
   getOAuthTokens,
-  isClaudeAiAuth,
+  isOAuthAuth,
   getApiProvider,
   type ResolvedApiKey,
   type ApiKeySource,

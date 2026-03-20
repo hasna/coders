@@ -4,8 +4,8 @@
  * Priority (highest to lowest, matching Claude Code's cascade):
  *   1. CLI flags (--model, --permission-mode, --settings, etc.)
  *   2. Enterprise managed settings (MDM/policy)
- *   3. Project .coders/settings.json (or .claude/settings.json)
- *   4. User ~/.coders/settings.json (or ~/.claude/settings.json)
+ *   3. Project .coders/settings.json 
+ *   4. User ~/.coders/settings.json 
  *
  * Config file (.config.json) stores auth state, device ID, etc.
  * Settings file (settings.json) stores user preferences, hooks, permissions.

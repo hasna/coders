@@ -2,7 +2,7 @@
  * Instructions file processing — CODERS.md / CLAUDE.md
  *
  * Reads and caches project instructions files.
- * Supports: CODERS.md (primary), CLAUDE.md (compat).
+ * Supports: CODERS.md (primary), removed.
  * Strips HTML comments, warns on external includes.
  */
 import { readFileSync, existsSync } from "fs";
@@ -36,14 +36,12 @@ export function getInstructionsContent(projectDir: string): string | null {
 }
 
 /**
- * Get global instructions (~/.coders/CODERS.md or ~/.claude/CLAUDE.md).
  */
 export function getGlobalInstructions(): string | null {
   const configDir = getConfigDir();
   const primary = join(configDir, "CODERS.md");
-  const compat = join(configDir, "CLAUDE.md");
 
-  const path = existsSync(primary) ? primary : existsSync(compat) ? compat : null;
+  const path = existsSync(primary) ? primary : null;
   if (!path) return null;
 
   try {

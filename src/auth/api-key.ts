@@ -18,7 +18,7 @@ export type ApiKeySource =
   | "env:ANTHROPIC_API_KEY"
   | "keychain"
   | "config:primaryApiKey"
-  | "config:claudeAiOauth"
+  | "config:codersOauth"
   | "none";
 
 export interface ResolvedApiKey {
@@ -58,9 +58,9 @@ export function resolveApiKey(): ResolvedApiKey | null {
   }
 
   // 5. Config: Claude.ai OAuth tokens
-  const claudeAiOauth = config.claudeAiOauth as { accessToken?: string } | undefined;
-  if (claudeAiOauth?.accessToken) {
-    return { apiKey: claudeAiOauth.accessToken, source: "config:claudeAiOauth", isOAuth: true };
+  const codersOauth = config.codersOauth as { accessToken?: string } | undefined;
+  if (codersOauth?.accessToken) {
+    return { apiKey: codersOauth.accessToken, source: "config:codersOauth", isOAuth: true };
   }
 
   return null;
@@ -92,7 +92,7 @@ export function detectAuthConflicts(): string[] {
 
   const config = getConfig();
   if (config.primaryApiKey) sources.push("config:primaryApiKey");
-  if ((config.claudeAiOauth as Record<string, unknown>)?.accessToken) sources.push("config:claudeAiOauth");
+  if ((config.codersOauth as Record<string, unknown>)?.accessToken) sources.push("config:codersOauth");
 
   if (sources.length > 1) {
     conflicts.push(
@@ -126,7 +126,7 @@ export function saveOAuthTokens(tokens: {
   refreshToken?: string;
   expiresAt?: number;
 }): void {
-  saveConfig("claudeAiOauth", tokens);
+  saveConfig("codersOauth", tokens);
 }
 
 /**
@@ -138,7 +138,7 @@ export function getOAuthTokens(): {
   expiresAt?: number;
 } | null {
   const config = getConfig();
-  const oauth = config.claudeAiOauth as Record<string, unknown> | undefined;
+  const oauth = config.codersOauth as Record<string, unknown> | undefined;
   if (!oauth?.accessToken) return null;
   return {
     accessToken: oauth.accessToken as string,
@@ -150,9 +150,9 @@ export function getOAuthTokens(): {
 /**
  * Check if using Claude.ai auth (subscription-based).
  */
-export function isClaudeAiAuth(): boolean {
+export function isOAuthAuth(): boolean {
   const resolved = resolveApiKey();
-  return resolved?.source === "config:claudeAiOauth" || resolved?.source === "env:CODERS_OAUTH_TOKEN";
+  return resolved?.source === "config:codersOauth" || resolved?.source === "env:CODERS_OAUTH_TOKEN";
 }
 
 /**

@@ -3,7 +3,7 @@
  *
  * Builds the system prompt from multiple sources:
  *   1. Core agent instructions
- *   2. CODERS.md / CLAUDE.md project instructions
+ *   2. CODERS.md / project instructions
  *   3. Tool-specific prompts (from each tool.prompt())
  *   4. Permission context (current mode, restrictions)
  *   5. Session context (project dir, git branch, active tasks)

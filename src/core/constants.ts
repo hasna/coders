@@ -49,11 +49,9 @@ export const WRITE_TOOLS = new Set([EDIT_TOOL, WRITE_TOOL, NOTEBOOK_EDIT_TOOL]);
 // Config paths
 export const CONFIG_DIR_ENV = "CODERS_CONFIG_DIR";
 export const DEFAULT_CONFIG_DIR = ".coders";
-export const COMPAT_CONFIG_DIR = ".claude"; // backwards compatibility
 
 // Instructions file names
 export const INSTRUCTIONS_FILE = "CODERS.md";
-export const COMPAT_INSTRUCTIONS_FILE = "CLAUDE.md";
 
 // Defaults
 export const DEFAULT_BASH_TIMEOUT_MS = 120_000;
