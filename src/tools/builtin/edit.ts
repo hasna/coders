@@ -131,6 +131,12 @@ export const editTool: Tool<EditInput, EditOutput> = {
   },
 
   async call(input, context): Promise<ToolCallResult<EditOutput>> {
+    if (!input.file_path || typeof input.file_path !== "string") {
+      return { data: { filePath: "", oldString: "", newString: "", replacements: 0, originalFile: "" } };
+    }
+    if (!input.old_string || typeof input.old_string !== "string") {
+      return { data: { filePath: input.file_path, oldString: "", newString: "", replacements: 0, originalFile: "" } };
+    }
     const resolved = resolvePath(input.file_path);
     const originalContent = readFileSync(resolved, "utf-8");
 

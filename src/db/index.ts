@@ -50,8 +50,7 @@ export function getDb(): any {
       const BetterSqlite3 = require("better-sqlite3");
       _db = new BetterSqlite3(dbPath);
     } catch {
-      // Last resort: in-memory mock
-      console.warn("[db] No SQLite available — using in-memory fallback");
+      // Last resort: silent in-memory mock (no user-visible output)
       _db = createInMemoryDb();
       initSchema(_db);
       return _db;

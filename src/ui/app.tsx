@@ -503,11 +503,11 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
         </Box>
       )}
 
-      {/* Streaming text as it arrives */}
+      {/* Streaming text — show only last 3 lines, not raw code dumps */}
       {busy && streaming && (
         <Box>
           <Text color="green">● </Text>
-          <Text>{streaming.slice(-500)}</Text>
+          <Text>{streaming.split("\n").filter(l => l.trim()).slice(-3).join("\n").slice(-200)}</Text>
         </Box>
       )}
 
@@ -546,6 +546,12 @@ export function launchInkApp(opts: { model?: string; mode?: string; initialPromp
     console.log(`\x1b[1m@hasna/coders\x1b[0m v${VERSION}\n\x1b[33mNo API key found.\x1b[0m Set ANTHROPIC_API_KEY or run: coders auth login\n`);
     process.exit(1);
   }
+
+  // Suppress console.warn/error — they corrupt the Ink UI
+  const origWarn = console.warn;
+  const origError = console.error;
+  console.warn = () => {};
+  console.error = () => {};
 
   const { waitUntilExit } = render(
     <App model={model} mode={mode} initialPrompt={opts.initialPrompt} />,

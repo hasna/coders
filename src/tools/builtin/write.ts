@@ -79,6 +79,9 @@ export const writeTool: Tool<WriteInput, WriteOutput> = {
   },
 
   async call(input, context): Promise<ToolCallResult<WriteOutput>> {
+    if (!input.file_path || typeof input.file_path !== "string") {
+      return { data: { filePath: "", bytesWritten: 0, created: false } };
+    }
     const resolved = resolvePath(input.file_path);
     const created = !existsSync(resolved);
 

@@ -132,6 +132,9 @@ export const readTool: Tool<ReadInput, ReadOutput> = {
   },
 
   async call(input, context): Promise<ToolCallResult<ReadOutput>> {
+    if (!input.file_path || typeof input.file_path !== "string") {
+      return { data: { content: "Error: file_path is required", filePath: "", totalLines: 0, linesRead: 0, startLine: 0 } };
+    }
     const resolved = resolvePath(input.file_path);
     const ext = extname(resolved).toLowerCase();
 
