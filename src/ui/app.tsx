@@ -315,6 +315,9 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
   const [tokens, setTokens] = useState(0);
   const [history, setHistory] = useState<ApiMessage[]>([]);
   const [activeTools, setActiveTools] = useState<ToolDisplay[]>([]);
+  const activeToolsRef = React.useRef<ToolDisplay[]>([]);
+  // Keep ref in sync with state (so closures always get latest)
+  activeToolsRef.current = activeTools;
   const rows = stdout?.rows ?? 24;
 
   // ── Permission dialog state ──────────────────────────────
@@ -428,10 +431,11 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
       setCost((p) => p + c.totalCostUsd);
       setTokens((p) => p + result.usage.totalInputTokens + result.usage.totalOutputTokens);
 
-      // Freeze active tools into the message
-      const frozenTools = [...activeTools].map((t) =>
+      // Freeze active tools into the message using REF (not stale state)
+      const frozenTools = [...activeToolsRef.current].map((t) =>
         t.status === "running" ? { ...t, status: "done" as const } : t
       );
+      const verb = VERBS[Math.floor(Math.random() * VERBS.length)];
 
       setMsgs((p) => [...p, {
         id: `a${Date.now()}`, role: "assistant",
@@ -439,7 +443,7 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
         timestamp: Date.now(),
         tools: frozenTools.length > 0 ? frozenTools : undefined,
         durationMs: dur,
-        durationVerb: VERBS[Math.floor(Math.random() * VERBS.length)], // Fixed once at creation
+        durationVerb: verb,
       }]);
 
       // Update conversation history for next turn
@@ -473,11 +477,11 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
     else if (!key.ctrl && !key.meta && ch) setInput((p) => p + ch);
   });
 
-  // Layout: only show last N messages that fit the screen.
-  // Reserve 4 lines for: header(1) + separator(1) + input(1) + status(1)
-  // Show at most the last 3 messages to prevent overflow
-  const maxMsgs = busy ? 1 : 3; // When busy, only show current interaction
-  const visible = msgs.slice(-maxMsgs);
+  // Layout: show last N messages based on available space.
+  // When busy with tools, show fewer so tool output doesn't overflow.
+  // When idle, show more conversation history.
+  const maxVisibleMsgs = busy ? 2 : Math.max(3, Math.floor((rows - 6) / 4));
+  const visible = msgs.slice(-maxVisibleMsgs);
 
   // Only show last 3 running/recent tools to prevent flooding
   const recentTools = activeTools.slice(-3);
