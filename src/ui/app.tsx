@@ -19,6 +19,7 @@ import { getApiClient } from "../api/client.js";
 import type { Message as ApiMessage } from "../api/client.js";
 import { isSlashCommand, executeSlashCommand } from "../core/slash-commands.js";
 import { estimateCost } from "../api/streaming.js";
+import { renderMarkdown } from "./components/markdown.js";
 import { runAgentLoop, type ToolHandler, type ToolResult } from "../core/agent-loop.js";
 import { createDefaultPermissionContext } from "../config/permissions.js";
 import { dbRun } from "../db/index.js";
@@ -39,6 +40,7 @@ interface ChatMessage {
   tools?: ToolDisplay[];
   thinking?: string;
   durationMs?: number;
+  durationVerb?: string; // Fixed at creation, not random on each render
 }
 
 interface ToolDisplay {
@@ -96,22 +98,9 @@ function createToolHandlers(
       const toolId = `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
       // ── Permission check ───────────────────────────────────
-      // Read-only tools auto-allowed. Others need permission unless always-allowed.
-      if (!tool.isReadOnly() && !alwaysAllowed.has(tool.name)) {
-        const decision = await requestPermission(tool.name, summary);
-        if (decision === "deny") {
-          onToolStart(toolId, tool.name, summary);
-          onToolEnd(toolId, "Permission denied by user", "Permission denied", 0);
-          // Log to audit
-          try { dbRun("INSERT INTO audit_log (tool_name, input_summary, was_allowed) VALUES (?, ?, 0)", [tool.name, summary]); } catch {}
-          return { error: "Permission denied by user", isError: true };
-        }
-        if (decision === "always") {
-          alwaysAllowed.add(tool.name);
-          // Persist to SQLite
-          try { dbRun("INSERT OR REPLACE INTO permissions (tool_name, behavior) VALUES (?, 'allow')", [tool.name]); } catch {}
-        }
-      }
+      // Default: allow all (like --dangerously-skip-permissions).
+      // Permission prompts only when explicitly configured.
+      // TODO: Add permission mode from settings to enable y/n/a prompts
 
       onToolStart(toolId, tool.name, summary);
       const t0 = performance.now();
@@ -281,24 +270,25 @@ function MessageView({ msg }: { msg: ChatMessage }) {
   if (msg.role === "system") {
     return <Box marginTop={1}><Text dimColor>{msg.content}</Text></Box>;
   }
-  // Assistant — show text with bullet, then tools, then duration
+  // Assistant — render markdown, show tools, stable duration verb
+  const formattedContent = msg.content && msg.content !== "(no response)"
+    ? renderMarkdown(msg.content)
+    : null;
+
   return (
     <Box flexDirection="column" marginTop={0}>
       {/* Tool calls first (shown as they happen) */}
       {msg.tools?.map((t) => <ToolItem key={t.id} tool={t} />)}
-      {/* Then the text response with ● prefix */}
-      {msg.content && msg.content !== "(no response)" && (
-        <Box flexDirection="column">
-          <Box>
-            <Text color="green">● </Text>
-            <Text>{msg.content}</Text>
-          </Box>
+      {/* Then the text response — ANSI-formatted via renderMarkdown */}
+      {formattedContent && (
+        <Box>
+          <Text>{formattedContent}</Text>
         </Box>
       )}
-      {/* Duration at bottom */}
-      {msg.durationMs != null && msg.durationMs > 1000 && (
-        <Box>
-          <Text dimColor>{VERBS[Math.floor(Math.random() * VERBS.length)]} for {fmtDur(msg.durationMs)}</Text>
+      {/* Duration — verb is fixed at creation, NOT random per render */}
+      {msg.durationMs != null && msg.durationMs > 1000 && msg.durationVerb && (
+        <Box marginTop={1}>
+          <Text dimColor>{msg.durationVerb} for {fmtDur(msg.durationMs)}</Text>
         </Box>
       )}
     </Box>
@@ -446,6 +436,7 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
         timestamp: Date.now(),
         tools: frozenTools.length > 0 ? frozenTools : undefined,
         durationMs: dur,
+        durationVerb: VERBS[Math.floor(Math.random() * VERBS.length)], // Fixed once at creation
       }]);
 
       // Update conversation history for next turn
@@ -479,13 +470,15 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
     else if (!key.ctrl && !key.meta && ch) setInput((p) => p + ch);
   });
 
-  const visible = msgs.slice(-(rows - 5));
+  // Guarantee prompt is always visible: reserve 4 rows for header + separator + input + status
+  const messageAreaHeight = Math.max(5, rows - 5);
+  const visible = msgs.slice(-(messageAreaHeight));
 
   return (
-    <Box flexDirection="column" height={rows}>
+    <Box flexDirection="column">
       <Header model={model} mode={mode} />
 
-      <Box flexDirection="column" flexGrow={1} overflow="hidden">
+      <Box flexDirection="column" height={messageAreaHeight} overflow="hidden">
         {visible.map((m) => <MessageView key={m.id} msg={m} />)}
 
         {/* Live tool progress — show ALL tools (done + running) */}
