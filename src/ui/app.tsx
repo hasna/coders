@@ -11,7 +11,7 @@
  *   7. Tracks cost and token usage
  */
 import React, { useState, useCallback, useEffect } from "react";
-import { render, Box, Text, useApp, useInput, useStdout } from "ink";
+import { render, Box, Text, Static, useApp, useInput, useStdout } from "ink";
 import { VERSION } from "../cli/index.js";
 import { resolveApiKey } from "../auth/api-key.js";
 import { getSettings } from "../config/loader.js";
@@ -477,31 +477,27 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
     else if (!key.ctrl && !key.meta && ch) setInput((p) => p + ch);
   });
 
-  // Layout: show last N messages based on available space.
-  // When busy with tools, show fewer so tool output doesn't overflow.
-  // When idle, show more conversation history.
-  const maxVisibleMsgs = busy ? 2 : Math.max(3, Math.floor((rows - 6) / 4));
-  const visible = msgs.slice(-maxVisibleMsgs);
-
-  // Only show last 3 running/recent tools to prevent flooding
+  // Only show last 3 active tools to prevent flooding
   const recentTools = activeTools.slice(-3);
 
-  // Truncate streaming text to last N lines to prevent overflow
-  const streamLines = streaming.split("\n");
-  const maxStreamLines = Math.max(3, rows - 15);
+  // Truncate streaming to last N lines
+  const streamLines = streaming ? streaming.split("\n") : [];
+  const maxStreamLines = Math.max(5, rows - 10);
   const truncatedStream = streamLines.length > maxStreamLines
     ? streamLines.slice(-maxStreamLines).join("\n")
     : streaming;
 
   return (
-    <Box flexDirection="column">
-      <Header model={model} mode={mode} />
+    <>
+      {/* STATIC: completed messages — written to stdout permanently, never re-render */}
+      <Static items={msgs}>
+        {(msg) => <MessageView key={msg.id} msg={msg} />}
+      </Static>
 
-      {/* Message area — flexGrow to fill, but content is limited */}
-      <Box flexDirection="column" flexGrow={1}>
-        {visible.map((m) => <MessageView key={m.id} msg={m} />)}
+      {/* DYNAMIC: only the active/live section re-renders */}
+      <Box flexDirection="column">
 
-        {/* Live tool progress — only last 3 tools */}
+        {/* Live tool progress */}
         {busy && recentTools.length > 0 && (
           <Box flexDirection="column">
             {activeTools.length > 3 && (
@@ -511,9 +507,9 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
           </Box>
         )}
 
-        {/* Streaming text — truncated to fit */}
+        {/* Streaming text */}
         {busy && truncatedStream && (
-          <Box marginTop={0}>
+          <Box>
             <Text color="green">● </Text>
             <Text>{truncatedStream}</Text>
           </Box>
@@ -521,36 +517,31 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
 
         {/* Thinking/working spinner */}
         {busy && !streaming && (
-          <Box marginTop={0}>
+          <Box>
             <SpinnerDot />
             <Text dimColor> {recentTools.some(t => t.status === "running") ? "Working" : "Thinking"}...</Text>
           </Box>
         )}
-      </Box>
 
-      {/* ── Separator line ── */}
-      <Box>
-        <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 120))}</Text>
-      </Box>
+        {/* ── Separator line ── */}
+        <Box>
+          <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 120))}</Text>
+        </Box>
 
-      {/* ── Input prompt ── */}
-      <Box>
-        <Text color="cyan" bold>{PROMPT} </Text>
-        {input.startsWith("/") ? (
-          <Text color="magenta">{input}</Text>
-        ) : (
-          <Text>{input}</Text>
-        )}
-        {!busy && <Text color="gray">▎</Text>}
-      </Box>
+        {/* ── Input prompt ── */}
+        <Box>
+          <Text color="cyan" bold>{PROMPT} </Text>
+          {input.startsWith("/") ? (
+            <Text color="magenta">{input}</Text>
+          ) : (
+            <Text>{input}</Text>
+          )}
+          {!busy && <Text color="gray">▎</Text>}
+        </Box>
 
-      {/* ── Separator line ── */}
-      <Box>
-        <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 120))}</Text>
+        <StatusBar model={model} mode={mode} cost={cost} tokens={tokens} />
       </Box>
-
-      <StatusBar model={model} mode={mode} cost={cost} tokens={tokens} />
-    </Box>
+    </>
   );
 }
 
