@@ -7,12 +7,14 @@
  *   - Require Read first for existing files
  *   - Track file writes
  */
-import { writeFileSync, existsSync, mkdirSync } from "fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { dirname, resolve, isAbsolute } from "path";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
 import { WRITE_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 import { hasFileBeenRead, markFileAsRead } from "./read.js";
+import { dbRun } from "../../db/index.js";
 
 // ── Schemas ────────────────────────────────────────────────────────
 
@@ -89,6 +91,18 @@ export const writeTool: Tool<WriteInput, WriteOutput> = {
     const dir = dirname(resolved);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
+    }
+
+    // Save checkpoint BEFORE overwriting existing files (for /rewind and /undo support)
+    if (!created) {
+      try {
+        const originalContent = readFileSync(resolved, "utf-8");
+        const cpId = randomUUID().slice(0, 8);
+        dbRun(
+          "INSERT INTO checkpoints (id, session_id, file_path, original_content, edit_operation) VALUES (?, ?, ?, ?, ?)",
+          [cpId, "current", resolved, originalContent, JSON.stringify({ type: "write_overwrite" })],
+        );
+      } catch { /* checkpoint failures shouldn't block write */ }
     }
 
     // Write the file

@@ -7,21 +7,32 @@
 import { Lexer, type Token, type Tokens } from "marked";
 
 // ── ANSI style helpers ─────────────────────────────────────────────
+// We use specific close codes instead of a blanket \x1b[0m reset so that
+// inline formatting (bold, italic, etc.) doesn't kill the parent style
+// context (e.g. a heading's color).  Ink also re-encodes ANSI, so
+// matching open/close pairs keeps the output well-formed.
 
 const ESC = "\x1b[";
-const RESET = `${ESC}0m`;
+const RESET = `${ESC}0m`;          // full reset — only for top-level wrappers
 const BOLD = `${ESC}1m`;
+const BOLD_OFF = `${ESC}22m`;      // close bold / dim
 const DIM = `${ESC}2m`;
+const DIM_OFF = `${ESC}22m`;
 const ITALIC = `${ESC}3m`;
+const ITALIC_OFF = `${ESC}23m`;
 const UNDERLINE = `${ESC}4m`;
+const UNDERLINE_OFF = `${ESC}24m`;
 const STRIKETHROUGH = `${ESC}9m`;
+const STRIKE_OFF = `${ESC}29m`;
 const FG_CYAN = `${ESC}36m`;
 const FG_YELLOW = `${ESC}33m`;
 const FG_GREEN = `${ESC}32m`;
 const FG_BLUE = `${ESC}34m`;
 const FG_MAGENTA = `${ESC}35m`;
 const FG_GRAY = `${ESC}90m`;
+const FG_DEFAULT = `${ESC}39m`;    // restore default foreground
 const BG_GRAY = `${ESC}100m`;
+const BG_DEFAULT = `${ESC}49m`;    // restore default background
 
 // ── Main render function ───────────────────────────────────────────
 
@@ -70,7 +81,7 @@ function renderTokens(tokens: Token[], maxWidth: number): string {
         break;
 
       case "hr":
-        lines.push(`${FG_GRAY}${"─".repeat(Math.min(maxWidth, 60))}${RESET}`);
+        lines.push(`${FG_GRAY}${"─".repeat(Math.min(maxWidth, 60))}${FG_DEFAULT}`);
         lines.push("");
         break;
 
@@ -97,9 +108,14 @@ function renderTokens(tokens: Token[], maxWidth: number): string {
 // ── Headings ───────────────────────────────────────────────────────
 
 function renderHeading(token: Tokens.Heading): string {
-  const prefix = token.depth <= 2 ? `${BOLD}${FG_CYAN}` : `${BOLD}${FG_BLUE}`;
+  const color = token.depth <= 2 ? FG_CYAN : FG_BLUE;
+  const prefix = `${BOLD}${color}`;
   const marker = "#".repeat(token.depth);
-  return `${prefix}${marker} ${renderInline(token.text)}${RESET}`;
+  // Render inline content, then re-apply the heading style after every
+  // close code so that bold-off or fg-default inside the inline text
+  // doesn't kill the heading's own bold+color.
+  const inner = renderInlineWithRestore(token.text, prefix);
+  return `${prefix}${marker} ${inner}${RESET}`;
 }
 
 // ── Code blocks ────────────────────────────────────────────────────
@@ -110,19 +126,19 @@ function renderCodeBlock(token: Tokens.Code, maxWidth: number): string[] {
 
   // Header line
   if (lang) {
-    lines.push(`${FG_GRAY}┌─ ${lang} ${"─".repeat(Math.max(0, Math.min(maxWidth, 60) - lang.length - 4))}${RESET}`);
+    lines.push(`${FG_GRAY}┌─ ${lang} ${"─".repeat(Math.max(0, Math.min(maxWidth, 60) - lang.length - 4))}${FG_DEFAULT}`);
   } else {
-    lines.push(`${FG_GRAY}┌${"─".repeat(Math.min(maxWidth, 60) - 1)}${RESET}`);
+    lines.push(`${FG_GRAY}┌${"─".repeat(Math.min(maxWidth, 60) - 1)}${FG_DEFAULT}`);
   }
 
   // Code lines with basic syntax highlighting
   for (const line of token.text.split("\n")) {
-    const highlighted = lang ? highlightSyntax(line, lang) : `${FG_GREEN}${line}${RESET}`;
-    lines.push(`${FG_GRAY}│${RESET} ${highlighted}`);
+    const highlighted = lang ? highlightSyntax(line, lang) : `${FG_GREEN}${line}${FG_DEFAULT}`;
+    lines.push(`${FG_GRAY}│${FG_DEFAULT} ${highlighted}`);
   }
 
   // Footer line
-  lines.push(`${FG_GRAY}└${"─".repeat(Math.min(maxWidth, 60) - 1)}${RESET}`);
+  lines.push(`${FG_GRAY}└${"─".repeat(Math.min(maxWidth, 60) - 1)}${FG_DEFAULT}`);
 
   return lines;
 }
@@ -135,7 +151,7 @@ function renderList(token: Tokens.List): string[] {
 
   for (let i = 0; i < token.items.length; i++) {
     const item = token.items[i];
-    const marker = ordered ? `${FG_YELLOW}${i + 1}.${RESET}` : `${FG_YELLOW}•${RESET}`;
+    const marker = ordered ? `${FG_YELLOW}${i + 1}.${FG_DEFAULT}` : `${FG_YELLOW}•${FG_DEFAULT}`;
     const text = renderInline(item.text);
     lines.push(`  ${marker} ${text}`);
 
@@ -157,7 +173,7 @@ function renderList(token: Tokens.List): string[] {
 
 function renderBlockquote(token: Tokens.Blockquote): string[] {
   const inner = renderTokens(token.tokens, 100);
-  return inner.split("\n").map((line) => `${FG_GRAY}│${RESET} ${DIM}${line}${RESET}`);
+  return inner.split("\n").map((line) => `${FG_GRAY}│${FG_DEFAULT} ${DIM}${line}${DIM_OFF}`);
 }
 
 // ── Tables ─────────────────────────────────────────────────────────
@@ -185,18 +201,18 @@ function renderTable(token: Tokens.Table, maxWidth: number): string[] {
   // Header
   const headerLine = token.header
     .map((h, i) => pad(h.text, colWidths[i]))
-    .join(` ${FG_GRAY}│${RESET} `);
-  lines.push(`${BOLD}${headerLine}${RESET}`);
+    .join(` ${FG_GRAY}│${FG_DEFAULT} `);
+  lines.push(`${BOLD}${headerLine}${BOLD_OFF}`);
 
   // Separator
   const sepLine = colWidths.map((w) => "─".repeat(w)).join(`─┼─`);
-  lines.push(`${FG_GRAY}${sepLine}${RESET}`);
+  lines.push(`${FG_GRAY}${sepLine}${FG_DEFAULT}`);
 
   // Rows
   for (const row of token.rows) {
     const rowLine = row
       .map((cell, i) => pad(cell.text, colWidths[i]))
-      .join(` ${FG_GRAY}│${RESET} `);
+      .join(` ${FG_GRAY}│${FG_DEFAULT} `);
     lines.push(rowLine);
   }
 
@@ -206,19 +222,30 @@ function renderTable(token: Tokens.Table, maxWidth: number): string[] {
 // ── Inline rendering ───────────────────────────────────────────────
 
 function renderInline(text: string): string {
+  return renderInlineWithRestore(text, "");
+}
+
+/**
+ * Render inline markdown with ANSI styles.
+ * After each close code, re-applies `restore` so that the parent
+ * context (e.g. a heading's bold+cyan) is not lost.
+ */
+function renderInlineWithRestore(text: string, restore: string): string {
+  // Use specific close codes so inline formatting does not reset
+  // the parent context (heading color, blockquote dim, etc.).
   return text
-    // Bold
-    .replace(/\*\*(.+?)\*\*/g, `${BOLD}$1${RESET}`)
-    .replace(/__(.+?)__/g, `${BOLD}$1${RESET}`)
+    // Bold — close with BOLD_OFF, then re-apply parent style
+    .replace(/\*\*(.+?)\*\*/g, `${BOLD}$1${BOLD_OFF}${restore}`)
+    .replace(/__(.+?)__/g, `${BOLD}$1${BOLD_OFF}${restore}`)
     // Italic
-    .replace(/\*(.+?)\*/g, `${ITALIC}$1${RESET}`)
-    .replace(/_(.+?)_/g, `${ITALIC}$1${RESET}`)
+    .replace(/\*(.+?)\*/g, `${ITALIC}$1${ITALIC_OFF}${restore}`)
+    .replace(/_(.+?)_/g, `${ITALIC}$1${ITALIC_OFF}${restore}`)
     // Strikethrough
-    .replace(/~~(.+?)~~/g, `${STRIKETHROUGH}$1${RESET}`)
-    // Inline code
-    .replace(/`([^`]+)`/g, `${BG_GRAY}${FG_GREEN} $1 ${RESET}`)
-    // Links
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, `${UNDERLINE}${FG_BLUE}$1${RESET}${FG_GRAY} ($2)${RESET}`)
+    .replace(/~~(.+?)~~/g, `${STRIKETHROUGH}$1${STRIKE_OFF}${restore}`)
+    // Inline code — needs fg + bg close, then restore parent
+    .replace(/`([^`]+)`/g, `${BG_GRAY}${FG_GREEN} $1 ${FG_DEFAULT}${BG_DEFAULT}${restore}`)
+    // Links — underline + color close, then gray URL + fg close, restore parent
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, `${UNDERLINE}${FG_BLUE}$1${UNDERLINE_OFF}${FG_DEFAULT}${FG_GRAY} ($2)${FG_DEFAULT}${restore}`)
     // HTML entities
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
@@ -244,24 +271,24 @@ function highlightSyntax(line: string, lang: string): string {
   let result = line;
 
   // Comments
-  result = result.replace(/(\/\/.*$)/gm, `${FG_GRAY}$1${RESET}`);
-  result = result.replace(/(#.*$)/gm, `${FG_GRAY}$1${RESET}`);
+  result = result.replace(/(\/\/.*$)/gm, `${FG_GRAY}$1${FG_DEFAULT}`);
+  result = result.replace(/(#.*$)/gm, `${FG_GRAY}$1${FG_DEFAULT}`);
 
   // Strings
-  result = result.replace(/("[^"]*")/g, `${FG_GREEN}$1${RESET}`);
-  result = result.replace(/('[^']*')/g, `${FG_GREEN}$1${RESET}`);
-  result = result.replace(/(`[^`]*`)/g, `${FG_GREEN}$1${RESET}`);
+  result = result.replace(/("[^"]*")/g, `${FG_GREEN}$1${FG_DEFAULT}`);
+  result = result.replace(/('[^']*')/g, `${FG_GREEN}$1${FG_DEFAULT}`);
+  result = result.replace(/(`[^`]*`)/g, `${FG_GREEN}$1${FG_DEFAULT}`);
 
   // Keywords (word boundary)
   for (const kwd of kw) {
     result = result.replace(
       new RegExp(`\\b(${kwd})\\b`, "g"),
-      `${FG_MAGENTA}$1${RESET}`,
+      `${FG_MAGENTA}$1${FG_DEFAULT}`,
     );
   }
 
   // Numbers
-  result = result.replace(/\b(\d+\.?\d*)\b/g, `${FG_YELLOW}$1${RESET}`);
+  result = result.replace(/\b(\d+\.?\d*)\b/g, `${FG_YELLOW}$1${FG_DEFAULT}`);
 
   return result;
 }

@@ -17,7 +17,7 @@ import { resolveApiKey } from "../auth/api-key.js";
 import { getSettings } from "../config/loader.js";
 import { getApiClient } from "../api/client.js";
 import type { Message as ApiMessage } from "../api/client.js";
-import { isSlashCommand, executeSlashCommand } from "../core/slash-commands.js";
+import { isSlashCommand, executeSlashCommand, getAllSlashCommands } from "../core/slash-commands.js";
 import { estimateCost } from "../api/streaming.js";
 import { renderMarkdown } from "./components/markdown.js";
 import { runAgentLoop, type ToolHandler, type ToolResult } from "../core/agent-loop.js";
@@ -320,6 +320,15 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
   // Keep ref in sync with state (so closures always get latest)
   activeToolsRef.current = activeTools;
   const rows = stdout?.rows ?? 24;
+  const [slashSelected, setSlashSelected] = useState(0);
+
+  // ── Slash command autocomplete ────────────────────────────
+  const allCommands = getAllSlashCommands();
+  const showSlashMenu = input.startsWith("/") && !busy;
+  const slashFilter = input.slice(1).toLowerCase();
+  const filteredCommands = showSlashMenu
+    ? allCommands.filter(c => c.name.toLowerCase().startsWith(slashFilter)).slice(0, 8)
+    : [];
 
   // ── Permission dialog state ──────────────────────────────
   const [permissionPending, setPermissionPending] = useState<{
@@ -474,8 +483,25 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
       if (key.ctrl && ch === "c") { setBusy(false); setStreaming(""); }
       return;
     }
-    if (key.return) { const t = input; setInput(""); submit(t); }
-    else if (key.backspace || key.delete) setInput((p) => p.slice(0, -1));
+    // Slash autocomplete navigation
+    if (showSlashMenu && filteredCommands.length > 0) {
+      if (key.downArrow || (key.tab && !key.shift)) {
+        setSlashSelected((s) => Math.min(s + 1, filteredCommands.length - 1));
+        return;
+      }
+      if (key.upArrow || (key.tab && key.shift)) {
+        setSlashSelected((s) => Math.max(s - 1, 0));
+        return;
+      }
+      if (key.return) {
+        const cmd = filteredCommands[slashSelected];
+        if (cmd) { setInput(""); setSlashSelected(0); submit(`/${cmd.name}`); return; }
+      }
+      if (key.escape) { setInput(""); setSlashSelected(0); return; }
+    }
+
+    if (key.return) { const t = input; setInput(""); setSlashSelected(0); submit(t); }
+    else if (key.backspace || key.delete) { setInput((p) => p.slice(0, -1)); setSlashSelected(0); }
     else if (key.ctrl && ch === "c") exit();
     else if (key.ctrl && ch === "d") exit();
     else if (key.ctrl && ch === "l") { setMsgs([]); setHistory([]); }
@@ -525,7 +551,7 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
         </Box>
       )}
 
-      {/* ── Separator + Input + Status ── */}
+      {/* ── Separator + Input + Autocomplete + Status ── */}
       <Box flexDirection="column">
         <Text dimColor>{sep}</Text>
         <Box>
@@ -533,6 +559,22 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
           {input.startsWith("/") ? <Text color="magenta">{input}</Text> : <Text>{input}</Text>}
           {!busy && <Text color="gray">▎</Text>}
         </Box>
+
+        {/* Slash command autocomplete dropdown */}
+        {showSlashMenu && filteredCommands.length > 0 && (
+          <Box flexDirection="column" paddingLeft={2}>
+            {filteredCommands.map((cmd, i) => (
+              <Box key={cmd.name}>
+                <Text color={i === slashSelected ? "cyan" : undefined} bold={i === slashSelected}>
+                  {i === slashSelected ? "▸ " : "  "}
+                </Text>
+                <Text color={i === slashSelected ? "cyan" : "blue"}>/{cmd.name.padEnd(16)}</Text>
+                <Text dimColor> {cmd.description}</Text>
+              </Box>
+            ))}
+          </Box>
+        )}
+
         <Text dimColor>{sep}</Text>
         <StatusBar model={model} mode={mode} cost={cost} tokens={tokens} />
       </Box>

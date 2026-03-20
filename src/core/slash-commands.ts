@@ -3,6 +3,8 @@
  *
  * Matches Claude Code's 49 slash commands (01-core-slash-commands.js).
  */
+import { writeFileSync } from "fs";
+import { dbAll, dbGet } from "../db/index.js";
 
 export interface SlashCommand {
   name: string;
@@ -192,6 +194,100 @@ function registerDefaults(): void {
       return { output: `Terminal: ${caps.name}, Color: ${caps.colorDepth}bit, Unicode: ${caps.unicode}` };
     },
   });
+
+  registerSlashCommand({
+    name: "rewind", category: "core",
+    description: "List recent file checkpoints and restore one",
+    handler: (args) => {
+      interface Checkpoint {
+        id: string;
+        file_path: string;
+        original_content: string;
+        edit_operation: string;
+        created_at: string;
+      }
+
+      const checkpoints = dbAll<Checkpoint>(
+        "SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT 10",
+      );
+
+      if (checkpoints.length === 0) {
+        return { output: "No checkpoints found. Checkpoints are created when files are edited or overwritten." };
+      }
+
+      // If user passed a number, restore that checkpoint
+      const choice = parseInt(args, 10);
+      if (!isNaN(choice) && choice >= 1 && choice <= checkpoints.length) {
+        const cp = checkpoints[choice - 1];
+        try {
+          writeFileSync(cp.file_path, cp.original_content, "utf-8");
+          const op = cp.edit_operation ? JSON.parse(cp.edit_operation) : null;
+          const summary = op?.old_string
+            ? `Reverted edit: "${truncate(op.old_string, 40)}" -> "${truncate(op.new_string, 40)}"`
+            : "Restored original content";
+          return { output: `Restored checkpoint #${choice}: ${cp.file_path}\n${summary}` };
+        } catch (e) {
+          return { output: `Failed to restore checkpoint: ${e instanceof Error ? e.message : String(e)}` };
+        }
+      }
+
+      // Otherwise list checkpoints
+      const lines = checkpoints.map((cp, i) => {
+        const op = cp.edit_operation ? JSON.parse(cp.edit_operation) : null;
+        const summary = op?.old_string
+          ? `"${truncate(op.old_string, 30)}" -> "${truncate(op.new_string, 30)}"`
+          : op?.type === "write_overwrite"
+            ? "file overwrite"
+            : "unknown operation";
+        return `  ${i + 1}. [${cp.created_at}] ${cp.file_path}\n     ${summary}`;
+      });
+
+      return {
+        output: `Recent checkpoints:\n${lines.join("\n")}\n\nUse /rewind <number> to restore a checkpoint.`,
+      };
+    },
+  });
+
+  registerSlashCommand({
+    name: "undo", category: "core",
+    description: "Revert the last file edit from the most recent checkpoint",
+    handler: () => {
+      interface Checkpoint {
+        id: string;
+        file_path: string;
+        original_content: string;
+        edit_operation: string;
+        created_at: string;
+      }
+
+      const cp = dbGet<Checkpoint>(
+        "SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT 1",
+      );
+
+      if (!cp) {
+        return { output: "No checkpoints found. Nothing to undo." };
+      }
+
+      try {
+        writeFileSync(cp.file_path, cp.original_content, "utf-8");
+        const op = cp.edit_operation ? JSON.parse(cp.edit_operation) : null;
+        const summary = op?.old_string
+          ? `Reverted: "${truncate(op.old_string, 50)}" -> "${truncate(op.new_string, 50)}"`
+          : op?.type === "write_overwrite"
+            ? "Restored file before overwrite"
+            : "Restored original content";
+        return { output: `Undo successful: ${cp.file_path}\n${summary}\n[checkpoint: ${cp.id} at ${cp.created_at}]` };
+      } catch (e) {
+        return { output: `Failed to undo: ${e instanceof Error ? e.message : String(e)}` };
+      }
+    },
+  });
+}
+
+function truncate(s: string, max: number): string {
+  if (!s) return "";
+  const oneLine = s.replace(/\n/g, "\\n");
+  return oneLine.length > max ? oneLine.slice(0, max) + "..." : oneLine;
 }
 
 // Initialize on module load
