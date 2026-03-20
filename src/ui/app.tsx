@@ -368,6 +368,9 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
   useEffect(() => { if (initialPrompt) submit(initialPrompt); }, []); // eslint-disable-line
 
   useInput((ch, key) => {
+    // Permission dialog has its own handler — skip main input when it's active
+    if (permissionPending) return;
+
     if (busy) {
       if (key.ctrl && ch === "c") { setBusy(false); setStreaming(""); }
       return;
@@ -427,10 +430,25 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
         )}
       </Box>
 
+      {/* ── Separator line ── */}
+      <Box>
+        <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 120))}</Text>
+      </Box>
+
+      {/* ── Input prompt ── */}
       <Box>
         <Text color="cyan" bold>{PROMPT} </Text>
-        <Text>{input}</Text>
+        {input.startsWith("/") ? (
+          <Text color="magenta">{input}</Text>
+        ) : (
+          <Text>{input}</Text>
+        )}
         {!busy && <Text color="gray">▎</Text>}
+      </Box>
+
+      {/* ── Separator line ── */}
+      <Box>
+        <Text dimColor>{"─".repeat(Math.min(stdout?.columns ?? 80, 120))}</Text>
       </Box>
 
       <StatusBar model={model} mode={mode} cost={cost} tokens={tokens} />
