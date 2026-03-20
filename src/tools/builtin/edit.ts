@@ -12,10 +12,12 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { dirname } from "path";
 import { mkdirSync } from "fs";
 import { resolve, isAbsolute } from "path";
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
 import { EDIT_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 import { hasFileBeenRead, markFileAsRead } from "./read.js";
+import { dbRun } from "../../db/index.js";
 
 // ── Schemas ────────────────────────────────────────────────────────
 
@@ -159,14 +161,23 @@ export const editTool: Tool<EditInput, EditOutput> = {
       replacements = 1;
     }
 
+    // Save checkpoint BEFORE writing (for /rewind support)
+    try {
+      const cpId = randomUUID().slice(0, 8);
+      dbRun(
+        "INSERT INTO checkpoints (id, session_id, file_path, original_content, edit_operation) VALUES (?, ?, ?, ?, ?)",
+        [cpId, "current", resolved, originalContent, JSON.stringify({ old_string: input.old_string, new_string: input.new_string })],
+      );
+    } catch { /* checkpoint failures shouldn't block edit */ }
+
     // Write the file
     writeFileSync(resolved, newContent, "utf-8");
 
     // Mark as read (so subsequent edits work)
     markFileAsRead(resolved);
 
-    // Generate simple diff
-    const gitDiff = generateSimpleDiff(originalContent, newContent, input.file_path);
+    // Generate proper unified diff
+    const gitDiff = generateUnifiedDiff(originalContent, newContent, input.file_path);
 
     return {
       data: {
@@ -214,43 +225,98 @@ function countOccurrences(text: string, search: string): number {
   return count;
 }
 
-function generateSimpleDiff(oldContent: string, newContent: string, filePath: string): string {
+/**
+ * Generate a proper unified diff between two strings.
+ * Shows context lines around changes, matching `diff -u` format.
+ */
+function generateUnifiedDiff(oldContent: string, newContent: string, filePath: string): string {
   const oldLines = oldContent.split("\n");
   const newLines = newContent.split("\n");
-  const lines: string[] = [`--- a/${filePath}`, `+++ b/${filePath}`];
+  const CONTEXT = 3; // lines of context around changes
+  const result: string[] = [`--- a/${filePath}`, `+++ b/${filePath}`];
 
-  // Simple line-by-line diff (not a full unified diff algorithm)
-  let i = 0;
-  let j = 0;
-  while (i < oldLines.length || j < newLines.length) {
-    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
-      i++;
-      j++;
-    } else {
-      // Find the changed region
-      const contextStart = Math.max(0, i - 2);
-      lines.push(`@@ -${contextStart + 1} @@`);
+  // Find changed regions
+  const hunks = findDiffHunks(oldLines, newLines, CONTEXT);
 
-      // Show removed lines
-      while (i < oldLines.length && (j >= newLines.length || oldLines[i] !== newLines[j])) {
-        lines.push(`-${oldLines[i]}`);
-        i++;
-        if (lines.length > 50) break; // limit diff size
-      }
-      // Show added lines
-      while (j < newLines.length && (i >= oldLines.length || oldLines[i] !== newLines[j])) {
-        lines.push(`+${newLines[j]}`);
-        j++;
-        if (lines.length > 100) break;
-      }
-      if (lines.length > 100) {
-        lines.push("... (diff truncated)");
-        break;
-      }
-    }
+  for (const hunk of hunks) {
+    const { oldStart, oldCount, newStart, newCount, lines } = hunk;
+    result.push(`@@ -${oldStart + 1},${oldCount} +${newStart + 1},${newCount} @@`);
+    result.push(...lines);
   }
 
-  return lines.length > 2 ? lines.join("\n") : "";
+  return result.length > 2 ? result.join("\n") : "";
+}
+
+interface DiffHunk {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  lines: string[];
+}
+
+function findDiffHunks(oldLines: string[], newLines: string[], context: number): DiffHunk[] {
+  // Simple LCS-based diff: find matching lines, everything else is a change
+  const hunks: DiffHunk[] = [];
+  let oi = 0, ni = 0;
+
+  while (oi < oldLines.length || ni < newLines.length) {
+    // Skip matching lines
+    if (oi < oldLines.length && ni < newLines.length && oldLines[oi] === newLines[ni]) {
+      oi++;
+      ni++;
+      continue;
+    }
+
+    // Found a change — collect the changed region
+    const changeOldStart = Math.max(0, oi - context);
+    const changeNewStart = Math.max(0, ni - context);
+    const hunkLines: string[] = [];
+
+    // Context before
+    for (let c = Math.max(0, oi - context); c < oi; c++) {
+      hunkLines.push(` ${oldLines[c]}`);
+    }
+
+    // Collect removed lines
+    const removedStart = oi;
+    while (oi < oldLines.length && (ni >= newLines.length || oldLines[oi] !== newLines[ni])) {
+      hunkLines.push(`-${oldLines[oi]}`);
+      oi++;
+      if (hunkLines.length > 100) break;
+    }
+
+    // Collect added lines
+    const addedStart = ni;
+    while (ni < newLines.length && (oi >= oldLines.length || oldLines[oi] !== newLines[ni])) {
+      hunkLines.push(`+${newLines[ni]}`);
+      ni++;
+      if (hunkLines.length > 200) break;
+    }
+
+    // Context after
+    const afterEnd = Math.min(oi + context, oldLines.length);
+    for (let c = oi; c < afterEnd && c < oldLines.length && ni + (c - oi) < newLines.length; c++) {
+      if (oldLines[c] === newLines[ni + (c - oi)]) {
+        hunkLines.push(` ${oldLines[c]}`);
+      }
+    }
+
+    const oldCount = (oi - changeOldStart) + Math.min(context, oldLines.length - oi);
+    const newCount = (ni - changeNewStart) + Math.min(context, newLines.length - ni);
+
+    hunks.push({
+      oldStart: changeOldStart,
+      oldCount: Math.max(oldCount, 1),
+      newStart: changeNewStart,
+      newCount: Math.max(newCount, 1),
+      lines: hunkLines,
+    });
+
+    if (hunks.length > 20) break; // limit hunks
+  }
+
+  return hunks;
 }
 
 // ── Prompt ─────────────────────────────────────────────────────────

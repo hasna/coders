@@ -21,6 +21,7 @@ import { isSlashCommand, executeSlashCommand } from "../core/slash-commands.js";
 import { estimateCost } from "../api/streaming.js";
 import { runAgentLoop, type ToolHandler, type ToolResult } from "../core/agent-loop.js";
 import { createDefaultPermissionContext } from "../config/permissions.js";
+import { dbRun } from "../db/index.js";
 import { bashTool } from "../tools/builtin/bash.js";
 import { readTool } from "../tools/builtin/read.js";
 import { editTool } from "../tools/builtin/edit.js";
@@ -76,10 +77,13 @@ function useSpinner(active: boolean): string {
 function createToolHandlers(
   onToolStart: (id: string, name: string, summary: string) => void,
   onToolEnd: (id: string, result: string, error?: string, durationMs?: number) => void,
+  requestPermission: (toolName: string, summary: string) => Promise<"allow" | "deny" | "always">,
 ): ToolHandler[] {
   const tools = [bashTool, readTool, editTool, writeTool, globTool, grepTool];
   const permCtx = createDefaultPermissionContext();
   const appState = { toolPermissionContext: permCtx, verbose: false };
+  // Track always-allowed tools (persisted in SQLite via permissions table)
+  const alwaysAllowed = new Set<string>();
 
   return tools.map((tool) => ({
     name: tool.name,
@@ -90,6 +94,25 @@ function createToolHandlers(
     call: async (input: Record<string, unknown>, ctx: any): Promise<ToolResult> => {
       const summary = toolSummary(tool.name, input);
       const toolId = `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+      // ── Permission check ───────────────────────────────────
+      // Read-only tools auto-allowed. Others need permission unless always-allowed.
+      if (!tool.isReadOnly() && !alwaysAllowed.has(tool.name)) {
+        const decision = await requestPermission(tool.name, summary);
+        if (decision === "deny") {
+          onToolStart(toolId, tool.name, summary);
+          onToolEnd(toolId, "Permission denied by user", "Permission denied", 0);
+          // Log to audit
+          try { dbRun("INSERT INTO audit_log (tool_name, input_summary, was_allowed) VALUES (?, ?, 0)", [tool.name, summary]); } catch {}
+          return { error: "Permission denied by user", isError: true };
+        }
+        if (decision === "always") {
+          alwaysAllowed.add(tool.name);
+          // Persist to SQLite
+          try { dbRun("INSERT OR REPLACE INTO permissions (tool_name, behavior) VALUES (?, 'allow')", [tool.name]); } catch {}
+        }
+      }
+
       onToolStart(toolId, tool.name, summary);
       const t0 = performance.now();
 
@@ -106,11 +129,14 @@ function createToolHandlers(
         const dur = performance.now() - t0;
 
         onToolEnd(toolId, block.content.slice(0, 500), block.is_error ? block.content : undefined, dur);
+        // Audit log
+        try { dbRun("INSERT INTO audit_log (tool_name, input_summary, result_summary, duration_ms, was_allowed) VALUES (?, ?, ?, ?, 1)", [tool.name, summary, block.content.slice(0, 200), dur]); } catch {}
         return { data: block.content };
       } catch (err) {
         const dur = performance.now() - t0;
         const errMsg = err instanceof Error ? err.message : String(err);
         onToolEnd(toolId, "", errMsg, dur);
+        try { dbRun("INSERT INTO audit_log (tool_name, input_summary, result_summary, duration_ms, was_allowed) VALUES (?, ?, ?, ?, 1)", [tool.name, summary, errMsg.slice(0, 200), dur]); } catch {}
         return { error: errMsg, isError: true };
       }
     },
@@ -203,6 +229,27 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
   const [activeTools, setActiveTools] = useState<ToolDisplay[]>([]);
   const rows = stdout?.rows ?? 24;
 
+  // ── Permission dialog state ──────────────────────────────
+  const [permissionPending, setPermissionPending] = useState<{
+    toolName: string; summary: string;
+    resolve: (decision: "allow" | "deny" | "always") => void;
+  } | null>(null);
+
+  // Permission request callback — creates a Promise that blocks until user responds
+  const requestPermission = useCallback((toolName: string, summary: string): Promise<"allow" | "deny" | "always"> => {
+    return new Promise((resolve) => {
+      setPermissionPending({ toolName, summary, resolve });
+    });
+  }, []);
+
+  // Handle permission dialog key presses
+  useInput((ch) => {
+    if (!permissionPending) return;
+    if (ch === "y" || ch === "Y") { permissionPending.resolve("allow"); setPermissionPending(null); }
+    else if (ch === "n" || ch === "N") { permissionPending.resolve("deny"); setPermissionPending(null); }
+    else if (ch === "a" || ch === "A") { permissionPending.resolve("always"); setPermissionPending(null); }
+  }, { isActive: !!permissionPending });
+
   // Tool UI callbacks
   const onToolStart = useCallback((id: string, name: string, summary: string) => {
     setActiveTools((prev) => [...prev, { id, name, summary, status: "running" }]);
@@ -240,7 +287,7 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
     const t0 = performance.now();
 
     try {
-      const toolHandlers = createToolHandlers(onToolStart, onToolEnd);
+      const toolHandlers = createToolHandlers(onToolStart, onToolEnd, requestPermission);
       const permCtx = createDefaultPermissionContext();
 
       // Run the REAL agent loop with tool execution
@@ -316,7 +363,7 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
     } finally {
       setBusy(false);
     }
-  }, [busy, history, model, exit, onToolStart, onToolEnd, streaming, activeTools]);
+  }, [busy, history, model, exit, onToolStart, onToolEnd, requestPermission, streaming, activeTools]);
 
   useEffect(() => { if (initialPrompt) submit(initialPrompt); }, []); // eslint-disable-line
 
@@ -352,10 +399,30 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
         {busy && streaming && <Box marginTop={1}><Text>{streaming}</Text></Box>}
 
         {/* Thinking spinner */}
-        {busy && !streaming && activeTools.length === 0 && (
+        {busy && !streaming && activeTools.length === 0 && !permissionPending && (
           <Box marginTop={1}>
             <Text color="cyan">{FRAMES[0]} </Text>
             <Text dimColor>Thinking...</Text>
+          </Box>
+        )}
+
+        {/* Permission dialog */}
+        {permissionPending && (
+          <Box flexDirection="column" marginTop={1}>
+            <Box>
+              <Text color="yellow" bold>? </Text>
+              <Text>Allow </Text>
+              <Text bold>{permissionPending.toolName}</Text>
+              <Text dimColor>: {permissionPending.summary.slice(0, 80)}</Text>
+            </Box>
+            <Box>
+              <Text dimColor>  </Text>
+              <Text color="green" bold>(y)</Text><Text color="green">es</Text>
+              <Text> </Text>
+              <Text color="red" bold>(n)</Text><Text color="red">o</Text>
+              <Text> </Text>
+              <Text color="blue" bold>(a)</Text><Text color="blue">lways allow</Text>
+            </Box>
           </Box>
         )}
       </Box>

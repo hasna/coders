@@ -7,6 +7,7 @@ import {
   saveSession,
   loadSession,
   updateSession,
+  addMessage,
   createFingerprint,
   setCurrentSessionId,
   getCurrentSessionId,
@@ -54,7 +55,7 @@ describe("session management", () => {
 
   it("saves and loads a session", () => {
     const session = createSession("/tmp/project");
-    session.messages = [{ role: "user", content: "Hello" }];
+    addMessage(session.id, "user", "Hello");
     saveSession(session);
 
     const loaded = loadSession(session.id);
@@ -73,10 +74,14 @@ describe("session management", () => {
     const session = createSession("/tmp/project");
     expect(session.metadata.completedTurns).toBe(0);
 
+    addMessage(session.id, "user", "Hi");
     updateSession(session, [{ role: "user", content: "Hi" }], { model: "sonnet" });
     expect(session.metadata.completedTurns).toBe(1);
     expect(session.metadata.model).toBe("sonnet");
-    expect(session.messages).toHaveLength(1);
+
+    // Verify persisted
+    const loaded = loadSession(session.id);
+    expect(loaded!.messages).toHaveLength(1);
   });
 
   it("tracks current session ID", () => {

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/coders",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Open-source coding agent CLI — inspired by Claude Code, improved with native @hasna/* ecosystem integration",
   "type": "module",
   "bin": {
@@ -51,6 +51,7 @@
     "@anthropic-ai/sdk": "^0.52.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "axios": "^1.7.0",
+    "better-sqlite3": "^12.8.0",
     "commander": "^13.0.0",
     "execa": "^9.5.0",
     "fast-glob": "^3.3.0",
@@ -60,6 +61,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
     "@types/react": "^18.3.0",
     "esbuild": "^0.25.0",

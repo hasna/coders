@@ -1,18 +1,16 @@
 /**
  * Session management — lifecycle, persistence, resume
  *
- * Mirrors Claude Code's session system (36-session-persistence.js):
- *   - Create session with unique ID and device ID
- *   - Persist messages and metadata to disk
- *   - Resume from session directory
- *   - Environment fingerprint
+ * NOW USES SQLite instead of JSON files.
+ * DB tables: sessions, messages
  */
 import { randomUUID } from "crypto";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
-import { join, dirname } from "path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { join } from "path";
 import { homedir, hostname, platform, arch, release } from "os";
-import { getSessionsDir } from "../config/paths.js";
+import { getConfigDir } from "../config/paths.js";
 import { VERSION, BUILD_TIME } from "../cli/index.js";
+import { dbRun, dbGet, dbAll } from "../db/index.js";
 import type { Message } from "../api/client.js";
 
 // ── Session Types ──────────────────────────────────────────────────
@@ -70,7 +68,7 @@ let _deviceId: string | null = null;
 function getOrCreateDeviceId(): string {
   if (_deviceId) return _deviceId;
 
-  const configDir = dirname(getSessionsDir());
+  const configDir = getConfigDir();
   const deviceIdPath = join(configDir, "device_id");
 
   if (existsSync(deviceIdPath)) {
@@ -106,205 +104,140 @@ export function createFingerprint(): EnvironmentFingerprint {
 }
 
 function detectCi(): boolean {
-  return !!(
-    process.env.CI ||
-    process.env.GITHUB_ACTIONS ||
-    process.env.GITLAB_CI ||
-    process.env.CIRCLECI ||
-    process.env.BUILDKITE ||
-    process.env.JENKINS_URL ||
-    process.env.CODEBUILD_BUILD_ID ||
-    process.env.TF_BUILD
-  );
+  return !!(process.env.CI || process.env.GITHUB_ACTIONS || process.env.GITLAB_CI || process.env.CIRCLECI || process.env.BUILDKITE || process.env.JENKINS_URL);
 }
 
 function detectWsl(): boolean {
   if (platform() !== "linux") return false;
-  try {
-    return existsSync("/proc/sys/fs/binfmt_misc/WSLInterop");
-  } catch {
-    return false;
-  }
+  try { return existsSync("/proc/sys/fs/binfmt_misc/WSLInterop"); } catch { return false; }
 }
 
 function detectPackageManagers(): string[] {
-  const managers: string[] = [];
-  const check = (cmd: string) => {
-    try {
-      require("child_process").execFileSync("which", [cmd], { stdio: "pipe" });
-      return true;
-    } catch { return false; }
-  };
-  if (check("npm")) managers.push("npm");
-  if (check("yarn")) managers.push("yarn");
-  if (check("pnpm")) managers.push("pnpm");
-  if (check("bun")) managers.push("bun");
-  return managers;
+  const m: string[] = [];
+  const check = (cmd: string) => { try { require("child_process").execFileSync("which", [cmd], { stdio: "pipe" }); return true; } catch { return false; } };
+  if (check("npm")) m.push("npm");
+  if (check("yarn")) m.push("yarn");
+  if (check("pnpm")) m.push("pnpm");
+  if (check("bun")) m.push("bun");
+  return m;
 }
 
 function detectRuntimes(): string[] {
-  const runtimes: string[] = ["node"];
-  const check = (cmd: string) => {
-    try {
-      require("child_process").execFileSync("which", [cmd], { stdio: "pipe" });
-      return true;
-    } catch { return false; }
-  };
-  if (check("bun")) runtimes.push("bun");
-  if (check("deno")) runtimes.push("deno");
-  return runtimes;
+  const r: string[] = ["node"];
+  const check = (cmd: string) => { try { require("child_process").execFileSync("which", [cmd], { stdio: "pipe" }); return true; } catch { return false; } };
+  if (check("bun")) r.push("bun");
+  if (check("deno")) r.push("deno");
+  return r;
 }
 
 function detectVcs(): string {
   if (existsSync(join(process.cwd(), ".git"))) return "git";
   if (existsSync(join(process.cwd(), ".hg"))) return "mercurial";
-  if (existsSync(join(process.cwd(), ".svn"))) return "svn";
   return "none";
 }
 
-// ── Session Lifecycle ──────────────────────────────────────────────
+// ── Session Lifecycle (SQLite-backed) ──────────────────────────────
 
-/**
- * Create a new session.
- */
 export function createSession(projectDir: string, options?: Partial<SessionMetadata>): Session {
   const id = randomUUID();
   const now = new Date().toISOString();
+  const deviceId = getOrCreateDeviceId();
+  const fingerprint = createFingerprint();
+  const metadata: SessionMetadata = {
+    completedTurns: 0,
+    lastInteractionTime: now,
+    ...options,
+  };
+
+  // Insert into SQLite
+  dbRun(
+    `INSERT INTO sessions (id, device_id, project_dir, original_cwd, model, app_version, build_time, fingerprint, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, deviceId, projectDir, process.cwd(), metadata.model ?? null, VERSION, BUILD_TIME,
+     JSON.stringify(fingerprint), JSON.stringify(metadata)],
+  );
 
   return {
-    id,
-    deviceId: getOrCreateDeviceId(),
-    createdAt: now,
-    updatedAt: now,
-    appVersion: VERSION,
-    buildTime: BUILD_TIME,
-    projectDir,
-    originalCwd: process.cwd(),
-    metadata: {
-      completedTurns: 0,
-      lastInteractionTime: now,
-      ...options,
-    },
-    messages: [],
-    fingerprint: createFingerprint(),
+    id, deviceId, createdAt: now, updatedAt: now, appVersion: VERSION, buildTime: BUILD_TIME,
+    projectDir, originalCwd: process.cwd(), metadata, messages: [], fingerprint,
   };
 }
 
-/**
- * Save session to disk.
- */
 export function saveSession(session: Session): void {
-  const dir = getSessionDir(session.id);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
   session.updatedAt = new Date().toISOString();
-
-  // Save metadata (without messages — those are large)
-  const meta = { ...session, messages: undefined };
-  writeFileSync(join(dir, "metadata.json"), JSON.stringify(meta, null, 2), "utf-8");
-
-  // Save messages separately
-  writeFileSync(join(dir, "messages.json"), JSON.stringify(session.messages), "utf-8");
+  dbRun(
+    `UPDATE sessions SET metadata = ?, updated_at = ? WHERE id = ?`,
+    [JSON.stringify(session.metadata), session.updatedAt, session.id],
+  );
 }
 
-/**
- * Load a session from disk.
- */
 export function loadSession(sessionId: string): Session | null {
-  const dir = getSessionDir(sessionId);
-  const metaPath = join(dir, "metadata.json");
+  const row = dbGet<any>(`SELECT * FROM sessions WHERE id = ?`, [sessionId]);
+  if (!row) return null;
 
-  if (!existsSync(metaPath)) return null;
+  const msgs = dbAll<any>(`SELECT * FROM messages WHERE session_id = ? ORDER BY id`, [sessionId]);
 
-  try {
-    const meta = JSON.parse(readFileSync(metaPath, "utf-8")) as Session;
-    const messagesPath = join(dir, "messages.json");
-    if (existsSync(messagesPath)) {
-      meta.messages = JSON.parse(readFileSync(messagesPath, "utf-8"));
-    } else {
-      meta.messages = [];
-    }
-    return meta;
-  } catch {
-    return null;
-  }
+  return {
+    id: row.id,
+    deviceId: row.device_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    appVersion: row.app_version ?? VERSION,
+    buildTime: row.build_time ?? BUILD_TIME,
+    projectDir: row.project_dir ?? "",
+    originalCwd: row.original_cwd ?? "",
+    metadata: safeParse(row.metadata, { completedTurns: 0, lastInteractionTime: row.updated_at }),
+    messages: msgs.map((m: any) => ({ role: m.role, content: m.content })),
+    fingerprint: safeParse(row.fingerprint, createFingerprint()),
+  };
 }
 
-/**
- * List recent sessions (sorted by updatedAt, newest first).
- */
 export function listRecentSessions(limit = 20): Array<{
-  id: string;
-  projectDir: string;
-  updatedAt: string;
-  completedTurns: number;
-  model?: string;
+  id: string; projectDir: string; updatedAt: string; completedTurns: number; model?: string;
 }> {
-  const sessionsDir = getSessionsDir();
-  if (!existsSync(sessionsDir)) return [];
-
-  const entries: Array<{
-    id: string;
-    projectDir: string;
-    updatedAt: string;
-    completedTurns: number;
-    model?: string;
-    mtime: number;
-  }> = [];
-
-  try {
-    for (const name of readdirSync(sessionsDir)) {
-      const metaPath = join(sessionsDir, name, "metadata.json");
-      if (!existsSync(metaPath)) continue;
-      try {
-        const stat = statSync(metaPath);
-        const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
-        entries.push({
-          id: meta.id ?? name,
-          projectDir: meta.projectDir ?? "",
-          updatedAt: meta.updatedAt ?? stat.mtime.toISOString(),
-          completedTurns: meta.metadata?.completedTurns ?? 0,
-          model: meta.metadata?.model,
-          mtime: stat.mtimeMs,
-        });
-      } catch { /* skip corrupt sessions */ }
-    }
-  } catch { /* sessions dir may not exist */ }
-
-  entries.sort((a, b) => b.mtime - a.mtime);
-  return entries.slice(0, limit);
+  const rows = dbAll<any>(
+    `SELECT id, project_dir, updated_at, metadata FROM sessions ORDER BY updated_at DESC LIMIT ?`,
+    [limit],
+  );
+  return rows.map((r: any) => {
+    const meta = safeParse(r.metadata, {});
+    return {
+      id: r.id,
+      projectDir: r.project_dir ?? "",
+      updatedAt: r.updated_at ?? "",
+      completedTurns: meta.completedTurns ?? 0,
+      model: meta.model,
+    };
+  });
 }
 
-/**
- * Update session messages and metadata.
- */
-export function updateSession(
-  session: Session,
-  messages: Message[],
-  metadata?: Partial<SessionMetadata>,
-): void {
-  session.messages = messages;
+export function addMessage(sessionId: string, role: string, content: string, extras?: {
+  toolUses?: string; thinking?: string; durationMs?: number; tokensIn?: number; tokensOut?: number; costUsd?: number;
+}): void {
+  dbRun(
+    `INSERT INTO messages (session_id, role, content, tool_uses, thinking, duration_ms, tokens_in, tokens_out, cost_usd)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [sessionId, role, content, extras?.toolUses ?? null, extras?.thinking ?? null,
+     extras?.durationMs ?? null, extras?.tokensIn ?? 0, extras?.tokensOut ?? 0, extras?.costUsd ?? 0],
+  );
+}
+
+export function updateSession(session: Session, messages: Message[], metadata?: Partial<SessionMetadata>): void {
   session.metadata.completedTurns++;
   session.metadata.lastInteractionTime = new Date().toISOString();
   if (metadata) Object.assign(session.metadata, metadata);
   saveSession(session);
 }
 
-/**
- * Get the current session ID (from env or global state).
- */
+// ── Current session tracking ───────────────────────────────────────
+
 let _currentSessionId: string | null = null;
-
-export function getCurrentSessionId(): string | null {
-  return _currentSessionId;
-}
-
-export function setCurrentSessionId(id: string): void {
-  _currentSessionId = id;
-}
+export function getCurrentSessionId(): string | null { return _currentSessionId; }
+export function setCurrentSessionId(id: string): void { _currentSessionId = id; }
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function getSessionDir(sessionId: string): string {
-  return join(getSessionsDir(), sessionId);
+function safeParse(json: string | null | undefined, fallback: any): any {
+  if (!json) return fallback;
+  try { return JSON.parse(json); } catch { return fallback; }
 }

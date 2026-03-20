@@ -9,7 +9,7 @@
  *   --version, --chrome-native-host
  */
 
-export const VERSION = "0.0.3";
+export const VERSION = "0.0.4";
 export const BUILD_TIME = process.env.CODERS_BUILD_TIME ?? new Date().toISOString();
 export const PACKAGE_NAME = "@hasna/coders";
 export const ISSUES_URL = "https://github.com/hasnaxyz/open-coders/issues";

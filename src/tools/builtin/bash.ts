@@ -20,6 +20,49 @@ import {
   BASH_TOOL,
   DEFAULT_MAX_RESULT_SIZE_CHARS,
 } from "../../core/constants.js";
+import { dbRun } from "../../db/index.js";
+
+// ── Dangerous command patterns (always blocked) ────────────────────
+
+const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+  { pattern: /\brm\s+-rf\s+\/\s*$/,    reason: "Recursive delete of root filesystem" },
+  { pattern: /\brm\s+-rf\s+~\//,        reason: "Recursive delete of home directory" },
+  { pattern: /\brm\s+-rf\s+\*/,         reason: "Recursive delete with wildcard" },
+  { pattern: /\bmkfs\b/,                reason: "Format filesystem" },
+  { pattern: /\bdd\s+.*of=\/dev\//,     reason: "Direct write to device" },
+  { pattern: />\s*\/dev\/sd[a-z]/,      reason: "Redirect to disk device" },
+  { pattern: /\b:(){ :\|:& };:/,        reason: "Fork bomb" },
+  { pattern: /\bchmod\s+-R\s+777\s+\//,reason: "Recursive chmod 777 on root" },
+  { pattern: /\bchown\s+-R\s+.*\s+\//,  reason: "Recursive chown on root" },
+  { pattern: /\bcurl\s.*\|\s*sh\b/,     reason: "Pipe remote script to shell" },
+  { pattern: /\bwget\s.*\|\s*sh\b/,     reason: "Pipe remote script to shell" },
+  { pattern: /\b\/etc\/passwd\b/,        reason: "Access to passwd file" },
+  { pattern: /\b\/etc\/shadow\b/,        reason: "Access to shadow file" },
+];
+
+/**
+ * Check if command contains dangerous patterns that should be blocked.
+ */
+export function isDangerousCommand(command: string): { dangerous: boolean; reason?: string } {
+  for (const { pattern, reason } of DANGEROUS_PATTERNS) {
+    if (pattern.test(command)) {
+      return { dangerous: true, reason };
+    }
+  }
+  return { dangerous: false };
+}
+
+/**
+ * Log a bash execution to the SQLite audit log.
+ */
+function auditLog(command: string, exitCode: number | null, durationMs: number, sessionId?: string): void {
+  try {
+    dbRun(
+      "INSERT INTO audit_log (session_id, tool_name, input_summary, result_summary, exit_code, duration_ms, was_allowed) VALUES (?, 'Bash', ?, ?, ?, ?, 1)",
+      [sessionId ?? null, command.slice(0, 500), exitCode === 0 ? "success" : `exit ${exitCode}`, exitCode, durationMs],
+    );
+  } catch { /* audit failures shouldn't break tool execution */ }
+}
 
 // ── Input / Output Schemas ─────────────────────────────────────────
 
@@ -231,6 +274,12 @@ export const bashTool: Tool<BashInput, BashOutput> = {
     if (input.timeout !== undefined && input.timeout > MAX_BASH_TIMEOUT_MS) {
       return { result: false, message: `Timeout exceeds maximum of ${MAX_BASH_TIMEOUT_MS}ms`, errorCode: 2 };
     }
+    // Block dangerous commands
+    const danger = isDangerousCommand(input.command);
+    if (danger.dangerous) {
+      try { dbRun("INSERT INTO audit_log (tool_name, input_summary, was_allowed) VALUES ('Bash', ?, 0)", [input.command.slice(0, 200)]); } catch {}
+      return { result: false, message: `Blocked dangerous command: ${danger.reason}`, errorCode: 3 };
+    }
     return { result: true };
   },
 
@@ -330,6 +379,9 @@ export const bashTool: Tool<BashInput, BashOutput> = {
         // Truncate large outputs
         stdout = truncateOutput(stdout);
         stderr = truncateOutput(stderr);
+
+        // Audit log
+        auditLog(command, code, durationMs);
 
         resolve({
           data: {
