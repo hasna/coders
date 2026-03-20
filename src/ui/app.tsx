@@ -185,15 +185,18 @@ function ToolItem({ tool }: { tool: ToolDisplay }) {
         <Text dimColor>{toolArgs}</Text>
         {tool.durationMs != null && <Text dimColor> ({(tool.durationMs / 1000).toFixed(1)}s)</Text>}
       </Box>
-      {/* Result with ⎿ connector */}
+      {/* Result with ⎿ connector — max 2 lines to prevent overflow */}
       {tool.status === "done" && resultPreview && (
         <Box flexDirection="column">
-          {resultPreview.map((line, i) => (
+          {resultPreview.slice(0, 2).map((line, i) => (
             <Box key={i}>
               <Text dimColor>  {CONN} </Text>
-              <Text>{line}</Text>
+              <Text>{line.slice(0, 100)}</Text>
             </Box>
           ))}
+          {resultPreview.length > 2 && (
+            <Box><Text dimColor>  {CONN} … +{resultPreview.length - 2} more (ctrl+o to expand)</Text></Box>
+          )}
         </Box>
       )}
       {/* Error with ⎿ connector */}
@@ -470,57 +473,53 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
     else if (!key.ctrl && !key.meta && ch) setInput((p) => p + ch);
   });
 
-  // Guarantee prompt is always visible: reserve 4 rows for header + separator + input + status
-  const messageAreaHeight = Math.max(5, rows - 5);
-  const visible = msgs.slice(-(messageAreaHeight));
+  // Layout: only show last N messages that fit the screen.
+  // Reserve 4 lines for: header(1) + separator(1) + input(1) + status(1)
+  // Show at most the last 3 messages to prevent overflow
+  const maxMsgs = busy ? 1 : 3; // When busy, only show current interaction
+  const visible = msgs.slice(-maxMsgs);
+
+  // Only show last 3 running/recent tools to prevent flooding
+  const recentTools = activeTools.slice(-3);
+
+  // Truncate streaming text to last N lines to prevent overflow
+  const streamLines = streaming.split("\n");
+  const maxStreamLines = Math.max(3, rows - 15);
+  const truncatedStream = streamLines.length > maxStreamLines
+    ? streamLines.slice(-maxStreamLines).join("\n")
+    : streaming;
 
   return (
     <Box flexDirection="column">
       <Header model={model} mode={mode} />
 
-      <Box flexDirection="column" height={messageAreaHeight} overflow="hidden">
+      {/* Message area — flexGrow to fill, but content is limited */}
+      <Box flexDirection="column" flexGrow={1}>
         {visible.map((m) => <MessageView key={m.id} msg={m} />)}
 
-        {/* Live tool progress — show ALL tools (done + running) */}
-        {busy && activeTools.length > 0 && (
+        {/* Live tool progress — only last 3 tools */}
+        {busy && recentTools.length > 0 && (
           <Box flexDirection="column">
-            {activeTools.map((t) => <ToolItem key={t.id} tool={t} />)}
+            {activeTools.length > 3 && (
+              <Box><Text dimColor>  … +{activeTools.length - 3} earlier tools</Text></Box>
+            )}
+            {recentTools.map((t) => <ToolItem key={t.id} tool={t} />)}
           </Box>
         )}
 
-        {/* Streaming text — show with ● prefix like Claude Code */}
-        {busy && streaming && (
+        {/* Streaming text — truncated to fit */}
+        {busy && truncatedStream && (
           <Box marginTop={0}>
             <Text color="green">● </Text>
-            <Text>{streaming}</Text>
+            <Text>{truncatedStream}</Text>
           </Box>
         )}
 
-        {/* Thinking/working spinner with elapsed time */}
-        {busy && !streaming && !permissionPending && (
+        {/* Thinking/working spinner */}
+        {busy && !streaming && (
           <Box marginTop={0}>
             <SpinnerDot />
-            <Text dimColor> {activeTools.some(t => t.status === "running") ? "Working" : "Thinking"}...</Text>
-          </Box>
-        )}
-
-        {/* Permission dialog */}
-        {permissionPending && (
-          <Box flexDirection="column" marginTop={1}>
-            <Box>
-              <Text color="yellow" bold>? </Text>
-              <Text>Allow </Text>
-              <Text bold>{permissionPending.toolName}</Text>
-              <Text dimColor>: {permissionPending.summary.slice(0, 80)}</Text>
-            </Box>
-            <Box>
-              <Text dimColor>  </Text>
-              <Text color="green" bold>(y)</Text><Text color="green">es</Text>
-              <Text> </Text>
-              <Text color="red" bold>(n)</Text><Text color="red">o</Text>
-              <Text> </Text>
-              <Text color="blue" bold>(a)</Text><Text color="blue">lways allow</Text>
-            </Box>
+            <Text dimColor> {recentTools.some(t => t.status === "running") ? "Working" : "Thinking"}...</Text>
           </Box>
         )}
       </Box>
