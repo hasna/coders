@@ -1,0 +1,87 @@
+{
+  "name": "@hasna/coders",
+  "version": "0.0.3",
+  "description": "Open-source coding agent CLI — inspired by Claude Code, improved with native @hasna/* ecosystem integration",
+  "type": "module",
+  "bin": {
+    "coders": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsx esbuild.config.ts",
+    "dev": "tsx src/cli/index.ts",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "clean": "rm -rf dist/"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist/cli.js",
+    "dist/cli.mjs",
+    "dist/cli.mjs.map",
+    "vendor/",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "cli",
+    "claude",
+    "anthropic",
+    "mcp",
+    "terminal"
+  ],
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasnaxyz/open-coders.git"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "axios": "^1.7.0",
+    "commander": "^13.0.0",
+    "execa": "^9.5.0",
+    "fast-glob": "^3.3.0",
+    "ink": "^5.1.0",
+    "marked": "^15.0.0",
+    "react": "^18.3.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "esbuild": "^0.25.0",
+    "react-devtools-core": "^7.0.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "optionalDependencies": {
+    "@hasna/todos": "*",
+    "@hasna/conversations": "*",
+    "@hasna/connectors": "*",
+    "@hasna/mementos": "*",
+    "@hasna/sessions": "*",
+    "@hasna/skills": "*",
+    "@hasna/configs": "*",
+    "@hasna/prompts": "*",
+    "@hasna/recordings": "*",
+    "@hasna/sandboxes": "*",
+    "@hasna/economy": "*",
+    "@hasna/wallets": "*",
+    "@hasna/brains": "*",
+    "@hasna/attachments": "*"
+  }
+}
