@@ -337,6 +337,38 @@ async function executeSingleTool(
   const { id: toolUseId, name: toolName, input } = block;
 
   options.onProgress?.({ type: "tool_execution", toolName, toolUseId });
+
+  // Guard: reject tool_use blocks whose input JSON was not fully received.
+  // The streaming accumulator flags these with _inputParseFailed = true, and
+  // the input will be {}. Executing with empty input causes tools like
+  // Write/Edit/Read to receive {file_path: undefined} and fail silently.
+  const parseFailed = (block as ToolUseBlock & { _inputParseFailed?: boolean })._inputParseFailed;
+  if (parseFailed) {
+    const rawJson = (block as ToolUseBlock & { _rawInputJson?: string })._rawInputJson;
+    const error = `Tool input not fully received — JSON parsing failed for ${toolName}. `
+      + `Partial input (${rawJson?.length ?? 0} chars) could not be parsed. `
+      + `This is a streaming issue; retrying the request should resolve it.`;
+    options.onToolUseRejected?.(toolName, toolUseId, error);
+    return { toolUseId, toolName, error, isError: true };
+  }
+
+  // Guard: even without the explicit flag, reject obviously empty input for
+  // tools that are known to require parameters (heuristic: the tool has a
+  // non-trivial inputSchema with required properties).
+  if (
+    input &&
+    Object.keys(input).length === 0 &&
+    handler.inputSchema &&
+    Array.isArray((handler.inputSchema as { required?: string[] }).required) &&
+    ((handler.inputSchema as { required?: string[] }).required ?? []).length > 0
+  ) {
+    const error = `Tool input not fully received — ${toolName} requires parameters `
+      + `(${((handler.inputSchema as { required?: string[] }).required ?? []).join(", ")}) `
+      + `but received empty input {}. Skipping execution to prevent undefined behavior.`;
+    options.onToolUseRejected?.(toolName, toolUseId, error);
+    return { toolUseId, toolName, error, isError: true };
+  }
+
   options.onToolUseStart?.(toolName, toolUseId, input);
 
   try {

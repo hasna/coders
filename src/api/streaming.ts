@@ -62,6 +62,10 @@ export interface ToolUseBlock {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  /** Set to true when input_json_delta could not be fully parsed at content_block_stop */
+  _inputParseFailed?: boolean;
+  /** Raw accumulated JSON string, retained when parsing fails for diagnostics */
+  _rawInputJson?: string;
 }
 
 export interface ServerToolUseBlock {
@@ -230,12 +234,9 @@ export async function* accumulateStream(
             case "input_json_delta":
               if (block.type === "tool_use") {
                 currentJsonAccumulator += event.delta.partial_json;
-                // Try to parse accumulated JSON
-                try {
-                  block.input = JSON.parse(currentJsonAccumulator);
-                } catch {
-                  // Not complete yet
-                }
+                // Don't eagerly parse during deltas — wait for content_block_stop
+                // to do the final parse. Intermediate parsing can set block.input to
+                // partial/incorrect values that get used if execution races ahead.
               }
               break;
           }
@@ -244,14 +245,21 @@ export async function* accumulateStream(
       }
 
       case "content_block_stop": {
-        // Finalize the block
+        // Finalize the block — this is where tool_use input JSON must be fully parsed
         if (event.index !== undefined) {
           const block = accumulated.content[event.index];
           if (block?.type === "tool_use" && currentJsonAccumulator) {
             try {
               block.input = JSON.parse(currentJsonAccumulator);
+              block._inputParseFailed = false;
             } catch {
+              // JSON was not fully received or is malformed.
+              // Do NOT silently set input = {} — that causes downstream tools
+              // to receive {file_path: undefined} and corrupt files.
+              // Instead, flag the failure and keep the raw string for diagnostics.
               block.input = {};
+              block._inputParseFailed = true;
+              block._rawInputJson = currentJsonAccumulator;
             }
           }
           currentJsonAccumulator = "";

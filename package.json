@@ -1,6 +1,6 @@
 {
   "name": "@hasna/coders",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "description": "Open-source coding agent CLI — inspired by Claude Code, improved with native @hasna/* ecosystem integration",
   "type": "module",
   "bin": {

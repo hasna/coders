@@ -38,10 +38,10 @@ await build({
     "tty",
     "worker_threads",
     // Native modules that can't be bundled
+    "better-sqlite3",
     "sharp",
     "tree-sitter",
     "yoga-wasm-web",
-    "better-sqlite3",
     "bun:sqlite",
     // Optional @hasna/* packages — resolved at runtime
     "@hasna/todos",
@@ -60,7 +60,7 @@ await build({
     "@hasna/attachments",
   ],
   define: {
-    "process.env.CODERS_VERSION": '"0.0.14"',
+    "process.env.CODERS_VERSION": '"0.0.15"',
     "process.env.CODERS_BUILD_TIME": `"${new Date().toISOString()}"`,
   },
   logLevel: "info",

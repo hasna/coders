@@ -13,7 +13,7 @@
  *   permissions, mcp_servers, metrics
  */
 import { join } from "path";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { getConfigDir } from "../config/paths.js";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -50,8 +50,8 @@ export function getDb(): any {
       const BetterSqlite3 = require("better-sqlite3");
       _db = new BetterSqlite3(dbPath);
     } catch {
-      // Last resort: silent in-memory mock (no user-visible output)
-      _db = createInMemoryDb();
+      // Last resort: silent JSON-file storage (no user-visible output)
+      _db = createJsonFileDb();
       initSchema(_db);
       return _db;
     }
@@ -305,27 +305,237 @@ export function closeDb(): void {
   }
 }
 
-// ── In-memory fallback (for environments without SQLite) ───────────
+// ── JSON-file fallback (for environments without SQLite) ────────────
+//
+// Persists data to ~/.coders/coders-fallback.json. Implements the subset
+// of the better-sqlite3 API that this codebase uses: exec, prepare (with
+// run/get/all), and close.  Completely silent — no console output.
 
-function createInMemoryDb(): any {
-  const tables = new Map<string, Map<string, any>>();
+interface JsonStore {
+  tables: Record<string, Record<string, unknown>[]>;
+  autoInc: Record<string, number>;
+}
+
+function createJsonFileDb(): any {
+  const storePath = join(getConfigDir(), "coders-fallback.json");
+  let store: JsonStore = { tables: {}, autoInc: {} };
+
+  // Load existing data from disk
+  try {
+    if (existsSync(storePath)) {
+      store = JSON.parse(readFileSync(storePath, "utf-8"));
+      if (!store.tables) store.tables = {};
+      if (!store.autoInc) store.autoInc = {};
+    }
+  } catch { /* corrupt file — start fresh */ }
+
+  function flush(): void {
+    try { writeFileSync(storePath, JSON.stringify(store), "utf-8"); } catch { /* silent */ }
+  }
+
+  function ensureTable(name: string): void {
+    if (!store.tables[name]) {
+      store.tables[name] = [];
+      store.autoInc[name] = 0;
+    }
+  }
+
+  function now(): string {
+    return new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+  }
+
+  // ── SQL parsing helpers ──────────────────────────────────────────
+
+  function parseInsert(sql: string, params: unknown[]): { changes: number; lastInsertRowid: number } {
+    const m = sql.match(/INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+    if (!m) return { changes: 0, lastInsertRowid: 0 };
+
+    const table = m[1];
+    ensureTable(table);
+
+    const cols = m[2].split(",").map(c => c.trim());
+    const valuePlaceholders = m[3].split(",").map(v => v.trim());
+
+    const row: Record<string, unknown> = {};
+    let paramIdx = 0;
+    for (let i = 0; i < cols.length; i++) {
+      const ph = valuePlaceholders[i];
+      if (ph === "?") {
+        row[cols[i]] = params[paramIdx++];
+      } else if (/^datetime\(/i.test(ph)) {
+        row[cols[i]] = now();
+      } else {
+        // Literal value — strip quotes
+        row[cols[i]] = ph.replace(/^['"]|['"]$/g, "");
+      }
+    }
+
+    // Auto-increment for INTEGER PRIMARY KEY
+    if (!row["id"] && store.autoInc[table] !== undefined) {
+      store.autoInc[table]++;
+      row["id"] = store.autoInc[table];
+    }
+
+    store.tables[table].push(row);
+    flush();
+    return { changes: 1, lastInsertRowid: typeof row["id"] === "number" ? row["id"] : 0 };
+  }
+
+  function parseSelect(sql: string, params: unknown[]): Record<string, unknown>[] {
+    const m = sql.match(/SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?(?:\s+LIMIT\s+(\d+))?$/i);
+    if (!m) return [];
+
+    const table = m[2];
+    if (!store.tables[table]) return [];
+
+    let rows = [...store.tables[table]];
+
+    // Apply WHERE clause (simple single-condition matching)
+    if (m[3]) {
+      const whereParts = m[3].trim();
+      // Handle "col = ?" pattern
+      const wm = whereParts.match(/(\w+)\s*=\s*\?/);
+      if (wm && params.length > 0) {
+        const col = wm[1];
+        const val = params[0];
+        rows = rows.filter(r => r[col] === val);
+      }
+    }
+
+    // Apply LIMIT
+    if (m[5]) {
+      rows = rows.slice(0, parseInt(m[5], 10));
+    }
+
+    return rows;
+  }
+
+  function parseUpdate(sql: string, params: unknown[]): { changes: number } {
+    const m = sql.match(/UPDATE\s+(\w+)\s+SET\s+(.+?)\s+WHERE\s+(.+)/i);
+    if (!m) return { changes: 0 };
+
+    const table = m[1];
+    if (!store.tables[table]) return { changes: 0 };
+
+    const setClauses = m[2].split(",").map(s => s.trim());
+    const whereClause = m[3].trim();
+
+    // Figure out param positions: SET params come first, then WHERE params
+    const setParamCount = setClauses.filter(c => c.includes("?")).length;
+
+    // Parse WHERE "col = ?"
+    const wm = whereClause.match(/(\w+)\s*=\s*\?/);
+    const whereCol = wm ? wm[1] : null;
+    const whereVal = wm ? params[setParamCount] : null;
+
+    let changes = 0;
+    for (const row of store.tables[table]) {
+      if (whereCol && row[whereCol] !== whereVal) continue;
+
+      let paramIdx = 0;
+      for (const clause of setClauses) {
+        const cm = clause.match(/(\w+)\s*=\s*(.+)/);
+        if (!cm) continue;
+        const col = cm[1];
+        const val = cm[2].trim();
+        if (val === "?") {
+          row[col] = params[paramIdx++];
+        } else if (/^datetime\(/i.test(val)) {
+          row[col] = now();
+        }
+      }
+      changes++;
+    }
+
+    if (changes > 0) flush();
+    return { changes };
+  }
+
+  function parseDelete(sql: string, params: unknown[]): { changes: number } {
+    const m = sql.match(/DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?/i);
+    if (!m) return { changes: 0 };
+
+    const table = m[1];
+    if (!store.tables[table]) return { changes: 0 };
+
+    if (!m[2]) {
+      const count = store.tables[table].length;
+      store.tables[table] = [];
+      flush();
+      return { changes: count };
+    }
+
+    const wm = m[2].match(/(\w+)\s*=\s*\?/);
+    if (!wm) return { changes: 0 };
+
+    const col = wm[1];
+    const val = params[0];
+    const before = store.tables[table].length;
+    store.tables[table] = store.tables[table].filter(r => r[col] !== val);
+    const changes = before - store.tables[table].length;
+    if (changes > 0) flush();
+    return { changes };
+  }
+
+  function execSql(sql: string, params: unknown[] = []): any {
+    const trimmed = sql.trim();
+    if (/^INSERT/i.test(trimmed)) return parseInsert(trimmed, params);
+    if (/^SELECT/i.test(trimmed)) return parseSelect(trimmed, params);
+    if (/^UPDATE/i.test(trimmed)) return parseUpdate(trimmed, params);
+    if (/^DELETE/i.test(trimmed)) return parseDelete(trimmed, params);
+    return { changes: 0 };
+  }
 
   return {
     exec(sql: string) {
-      // Parse CREATE TABLE statements to register tables
-      const matches = sql.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g);
+      // Handle CREATE TABLE statements — register table names
+      const matches = sql.matchAll(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)/gi);
       for (const m of matches) {
-        if (!tables.has(m[1])) tables.set(m[1], new Map());
+        ensureTable(m[1]);
       }
+      // Ignore PRAGMAs, CREATE INDEX, etc. silently
     },
+
     prepare(sql: string) {
       return {
-        run(...params: unknown[]) { return { changes: 0 }; },
-        get(...params: unknown[]) { return undefined; },
-        all(...params: unknown[]) { return []; },
+        run(...params: unknown[]) {
+          return execSql(sql, params);
+        },
+        get(...params: unknown[]) {
+          const result = execSql(sql, params);
+          if (Array.isArray(result)) return result[0];
+          return undefined;
+        },
+        all(...params: unknown[]) {
+          const result = execSql(sql, params);
+          if (Array.isArray(result)) return result;
+          return [];
+        },
       };
     },
-    close() { tables.clear(); },
+
+    // Bun-style API aliases
+    run(sql: string, params: unknown[] = []) {
+      return execSql(sql, params);
+    },
+    query(sql: string) {
+      return {
+        get(...params: unknown[]) {
+          const result = execSql(sql, params);
+          if (Array.isArray(result)) return result[0];
+          return undefined;
+        },
+        all(...params: unknown[]) {
+          const result = execSql(sql, params);
+          if (Array.isArray(result)) return result;
+          return [];
+        },
+      };
+    },
+
+    close() {
+      flush();
+    },
   };
 }
 

@@ -23,6 +23,7 @@ import { renderMarkdown } from "./components/markdown.js";
 import { runAgentLoop, type ToolHandler, type ToolResult } from "../core/agent-loop.js";
 import { createDefaultPermissionContext } from "../config/permissions.js";
 import { dbRun } from "../db/index.js";
+import { buildSystemPrompt } from "../core/system-prompt.js";
 import { bashTool } from "../tools/builtin/bash.js";
 import { readTool } from "../tools/builtin/read.js";
 import { editTool } from "../tools/builtin/edit.js";
@@ -386,7 +387,12 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
         newHistory,
         {
           client: getApiClient(),
-          systemPrompt: "You are a helpful coding assistant. You can read, edit, and create files, run bash commands, and search codebases. Use tools to help the user with their coding tasks. When you need to see a file, use Read. When you need to find files, use Glob. When you need to search content, use Grep. When you need to run a command, use Bash. When you need to edit a file, use Edit. When you need to create a file, use Write.",
+          systemPrompt: buildSystemPrompt({
+            projectDir: process.cwd(),
+            model,
+            permissionMode: mode,
+            tools: toolHandlers.map(t => ({ name: t.name, prompt: "" })),
+          }),
           tools: toolHandlers,
           model,
           thinkingConfig: { type: "disabled" },
