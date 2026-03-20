@@ -71,18 +71,6 @@ export const writeTool: Tool<WriteInput, WriteOutput> = {
     if (!input.file_path) {
       return { result: false, message: "file_path is required", errorCode: 1 };
     }
-
-    const resolved = resolvePath(input.file_path);
-
-    // If file exists, require it to have been read first
-    if (existsSync(resolved) && !hasFileBeenRead(resolved)) {
-      return {
-        result: false,
-        message: "This file already exists. You must Read it first before overwriting. Use the Read tool, then retry.",
-        errorCode: 2,
-      };
-    }
-
     return { result: true };
   },
 

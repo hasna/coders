@@ -11,7 +11,7 @@
  *   7. Tracks cost and token usage
  */
 import React, { useState, useCallback, useEffect } from "react";
-import { render, Box, Text, useApp, useInput, useStdout } from "ink";
+import { render, Box, Text, Static, Newline, useApp, useInput, useStdout } from "ink";
 import { VERSION } from "../cli/index.js";
 import { resolveApiKey } from "../auth/api-key.js";
 import { getSettings } from "../config/loader.js";
@@ -477,83 +477,60 @@ function App({ model, mode, initialPrompt }: { model: string; mode: string; init
     else if (!key.ctrl && !key.meta && ch) setInput((p) => p + ch);
   });
 
-  // Show last N messages that fit, reserving space for prompt area (5 lines)
-  const maxVisible = Math.max(2, Math.floor((rows - 5) / 3));
-  const visible = msgs.slice(-maxVisible);
-  const hiddenCount = msgs.length - visible.length;
-
-  // Only show last 3 active tools
-  const recentTools = activeTools.slice(-3);
-
-  // Truncate streaming to fit
-  const streamLines = streaming ? streaming.split("\n") : [];
-  const maxStreamLines = Math.max(3, rows - 12);
-  const truncatedStream = streamLines.length > maxStreamLines
-    ? streamLines.slice(-maxStreamLines).join("\n")
-    : streaming;
-
+  // Only last 2 active tools shown live
+  const recentTools = activeTools.slice(-2);
   const cols = stdout?.columns ?? 80;
+  const sep = "─".repeat(Math.min(cols, 120));
 
   return (
-    <Box flexDirection="column" height={rows}>
-      {/* ── Header ── */}
-      <Header model={model} mode={mode} />
-
-      {/* ── Messages area — grows to fill available space ── */}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden">
-        {hiddenCount > 0 && (
-          <Box><Text dimColor>  ↑ {hiddenCount} earlier message{hiddenCount !== 1 ? "s" : ""}</Text></Box>
-        )}
-
-        {visible.map((m) => <MessageView key={m.id} msg={m} />)}
-
-        {/* Live tool progress */}
-        {busy && recentTools.length > 0 && (
-          <Box flexDirection="column">
-            {activeTools.length > 3 && (
-              <Box><Text dimColor>  … +{activeTools.length - 3} earlier tools</Text></Box>
-            )}
-            {recentTools.map((t) => <ToolItem key={t.id} tool={t} />)}
+    <>
+      {/* ══ STATIC ZONE: completed messages scroll naturally in terminal ══ */}
+      {/* These write to stdout ONCE and never re-render — proper scrolling */}
+      <Static items={msgs}>
+        {(msg) => (
+          <Box key={msg.id} flexDirection="column">
+            <MessageView msg={msg} />
           </Box>
         )}
+      </Static>
 
-        {/* Streaming text */}
-        {busy && truncatedStream && (
-          <Box>
-            <Text color="green">● </Text>
-            <Text>{truncatedStream}</Text>
-          </Box>
-        )}
+      {/* ══ DYNAMIC ZONE: only this part re-renders ══ */}
 
-        {/* Thinking/working spinner */}
-        {busy && !streaming && (
-          <Box>
-            <SpinnerDot />
-            <Text dimColor> {recentTools.some(t => t.status === "running") ? "Working" : "Thinking"}...</Text>
-          </Box>
-        )}
+      {/* Live tool progress while agent is working */}
+      {busy && recentTools.length > 0 && (
+        <Box flexDirection="column">
+          {recentTools.map((t) => <ToolItem key={t.id} tool={t} />)}
+        </Box>
+      )}
+
+      {/* Streaming text as it arrives */}
+      {busy && streaming && (
+        <Box>
+          <Text color="green">● </Text>
+          <Text>{streaming.slice(-500)}</Text>
+        </Box>
+      )}
+
+      {/* Spinner while thinking */}
+      {busy && !streaming && (
+        <Box>
+          <SpinnerDot />
+          <Text dimColor> {recentTools.some(t => t.status === "running") ? "Working" : "Thinking"}...</Text>
+        </Box>
+      )}
+
+      {/* ── Separator + Input + Status ── */}
+      <Box flexDirection="column">
+        <Text dimColor>{sep}</Text>
+        <Box>
+          <Text color="cyan" bold>{PROMPT} </Text>
+          {input.startsWith("/") ? <Text color="magenta">{input}</Text> : <Text>{input}</Text>}
+          {!busy && <Text color="gray">▎</Text>}
+        </Box>
+        <Text dimColor>{sep}</Text>
+        <StatusBar model={model} mode={mode} cost={cost} tokens={tokens} />
       </Box>
-
-      {/* ── Separator ── */}
-      <Box><Text dimColor>{"─".repeat(Math.min(cols, 120))}</Text></Box>
-
-      {/* ── Input prompt (always visible at bottom) ── */}
-      <Box>
-        <Text color="cyan" bold>{PROMPT} </Text>
-        {input.startsWith("/") ? (
-          <Text color="magenta">{input}</Text>
-        ) : (
-          <Text>{input}</Text>
-        )}
-        {!busy && <Text color="gray">▎</Text>}
-      </Box>
-
-      {/* ── Separator ── */}
-      <Box><Text dimColor>{"─".repeat(Math.min(cols, 120))}</Text></Box>
-
-      {/* ── Status bar (pinned at bottom) ── */}
-      <StatusBar model={model} mode={mode} cost={cost} tokens={tokens} />
-    </Box>
+    </>
   );
 }
 
