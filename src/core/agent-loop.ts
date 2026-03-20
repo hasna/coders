@@ -227,7 +227,10 @@ export async function runAgentLoop(
     );
 
     // If no tool uses, the turn is complete
-    if (toolUseBlocks.length === 0 || stopReason === "end_turn") {
+    // NOTE: Do NOT check stopReason here — even with "end_turn", if there are
+    // tool_use blocks they MUST be executed. The model sometimes sends text +
+    // tool_use in the same response with stop_reason="end_turn".
+    if (toolUseBlocks.length === 0) {
       options.onTurnComplete?.(turnIndex, assistantMessage);
       options.onProgress?.({ type: "turn_end", turnIndex, stopReason });
       turnIndex++;
