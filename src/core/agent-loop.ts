@@ -189,13 +189,20 @@ export async function runAgentLoop(
           }
         }
 
-        // Track accumulated state
-        if (event.type === "message_stop" || event.type === "message_delta") {
+        // Track stop reason progressively (message_delta carries it)
+        if (event.type === "message_delta") {
+          stopReason = accumulated.stopReason ?? stopReason;
+        }
+
+        // Finalize content blocks and usage ONCE on message_stop only.
+        // - contentBlocks: setting on every event risks dropping blocks mid-stream
+        // - usage: accumulated.usage is cumulative, so adding on each event double-counts
+        if (event.type === "message_stop") {
           if (accumulated.content) {
             contentBlocks.length = 0;
             contentBlocks.push(...accumulated.content);
           }
-          stopReason = accumulated.stopReason ?? null;
+          stopReason = accumulated.stopReason ?? stopReason;
           if (accumulated.usage) {
             totalInputTokens += accumulated.usage.inputTokens;
             totalOutputTokens += accumulated.usage.outputTokens;
@@ -213,10 +220,19 @@ export async function runAgentLoop(
     if (aborted) break;
 
     // ── Build assistant message from content blocks ────────────
+    // Strip internal properties (_inputParseFailed, _rawInputJson) that the
+    // streaming accumulator attaches — the API rejects extra fields.
+    const cleanedBlocks = contentBlocks.map(b => {
+      if (b.type === "tool_use") {
+        const { _inputParseFailed, _rawInputJson, ...clean } = b as any;
+        return clean as ContentBlock;
+      }
+      return b;
+    });
 
     const assistantMessage: Message = {
       role: "assistant",
-      content: contentBlocks,
+      content: cleanedBlocks,
     };
     messages.push(assistantMessage);
 

@@ -7,7 +7,7 @@
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
-import { homedir, hostname, platform, arch, release } from "os";
+import { hostname, platform, arch, release } from "os";
 import { getConfigDir } from "../config/paths.js";
 import { VERSION, BUILD_TIME } from "../cli/index.js";
 import { dbRun, dbGet, dbAll } from "../db/index.js";
@@ -222,7 +222,7 @@ export function addMessage(sessionId: string, role: string, content: string, ext
   );
 }
 
-export function updateSession(session: Session, messages: Message[], metadata?: Partial<SessionMetadata>): void {
+export function updateSession(session: Session, _messages: Message[], metadata?: Partial<SessionMetadata>): void {
   session.metadata.completedTurns++;
   session.metadata.lastInteractionTime = new Date().toISOString();
   if (metadata) Object.assign(session.metadata, metadata);
@@ -234,6 +234,95 @@ export function updateSession(session: Session, messages: Message[], metadata?: 
 let _currentSessionId: string | null = null;
 export function getCurrentSessionId(): string | null { return _currentSessionId; }
 export function setCurrentSessionId(id: string): void { _currentSessionId = id; }
+
+// ── Conversation Checkpoints ────────────────────────────────────────
+
+export interface ConversationCheckpoint {
+  id: string;
+  sessionId: string;
+  label: string;
+  messages: Message[];
+  messageCount: number;
+  createdAt: string;
+}
+
+/**
+ * Save a conversation checkpoint — snapshot of the current messages array.
+ */
+export function saveCheckpoint(sessionId: string, messages: Message[], label?: string): ConversationCheckpoint {
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  const messagesJson = JSON.stringify(messages);
+  const messageCount = messages.length;
+  const cpLabel = label || `checkpoint-${messageCount}msg`;
+
+  dbRun(
+    `INSERT INTO conversation_checkpoints (id, session_id, label, messages, message_count, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [id, sessionId, cpLabel, messagesJson, messageCount, now],
+  );
+
+  return { id, sessionId, label: cpLabel, messages, messageCount, createdAt: now };
+}
+
+/**
+ * Load a specific checkpoint by ID.
+ */
+export function loadCheckpoint(checkpointId: string): ConversationCheckpoint | null {
+  const row = dbGet<any>(
+    `SELECT * FROM conversation_checkpoints WHERE id = ?`,
+    [checkpointId],
+  );
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    label: row.label ?? "",
+    messages: safeParse(row.messages, []),
+    messageCount: row.message_count ?? 0,
+    createdAt: row.created_at ?? "",
+  };
+}
+
+/**
+ * Load the latest checkpoint for a session.
+ */
+export function loadLatestCheckpoint(sessionId: string): ConversationCheckpoint | null {
+  const row = dbGet<any>(
+    `SELECT * FROM conversation_checkpoints WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`,
+    [sessionId],
+  );
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    label: row.label ?? "",
+    messages: safeParse(row.messages, []),
+    messageCount: row.message_count ?? 0,
+    createdAt: row.created_at ?? "",
+  };
+}
+
+/**
+ * List checkpoints for a session (most recent first).
+ */
+export function listCheckpoints(sessionId: string, limit = 10): ConversationCheckpoint[] {
+  const rows = dbAll<any>(
+    `SELECT * FROM conversation_checkpoints WHERE session_id = ? ORDER BY created_at DESC LIMIT ?`,
+    [sessionId, limit],
+  );
+
+  return rows.map((row: any) => ({
+    id: row.id,
+    sessionId: row.session_id,
+    label: row.label ?? "",
+    messages: safeParse(row.messages, []),
+    messageCount: row.message_count ?? 0,
+    createdAt: row.created_at ?? "",
+  }));
+}
 
 // ── Helpers ────────────────────────────────────────────────────────
 

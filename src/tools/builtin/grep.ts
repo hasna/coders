@@ -214,8 +214,9 @@ export const grepTool: Tool<GrepInput, GrepOutput> = {
     } catch (error: unknown) {
       const err = error as { status?: number; stdout?: string; stderr?: string; killed?: boolean };
 
-      // Exit code 1 = no matches (not an error)
-      if (err.status === 1) {
+      // Exit code 1 = no matches (not an error), but only if stderr is empty.
+      // If stderr has content with exit code 1, it's a real error (e.g. invalid regex).
+      if (err.status === 1 && (!err.stderr || err.stderr.trim() === "")) {
         return {
           data: { content: "No matches found.", matchCount: 0, fileCount: 0, truncated: false },
         };

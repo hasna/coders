@@ -232,6 +232,17 @@ function initSchema(db: any): void {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Conversation checkpoints (for /checkpoint and /restore)
+    CREATE TABLE IF NOT EXISTS conversation_checkpoints (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      label TEXT DEFAULT '',
+      messages TEXT NOT NULL,  -- JSON array of {role, content} messages
+      message_count INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_conv_checkpoints_session ON conversation_checkpoints(session_id);
+
     -- Audit log (for security — tracks all tool executions)
     CREATE TABLE IF NOT EXISTS audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

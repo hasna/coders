@@ -2,10 +2,9 @@
  * Team/multi-agent coordination
  *
  * Create teams, spawn teammates, assign tasks, coordinate work.
+ * Uses SQLite via src/db/index.ts (tables: teams, team_members).
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
-import { getTeamsDir, getTasksDir } from "../config/paths.js";
+import { dbRun, dbGet, dbAll } from "../db/index.js";
 
 export interface Team {
   name: string;
@@ -24,54 +23,66 @@ export interface TeamMember {
 }
 
 export function createTeam(name: string, description?: string): Team {
-  const team: Team = {
+  const now = new Date().toISOString();
+
+  dbRun(
+    `INSERT OR IGNORE INTO teams (name, description, task_list_id, created_at) VALUES (?, ?, ?, ?)`,
+    [name, description ?? null, name, now],
+  );
+
+  return {
     name,
     description,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
     members: [],
     taskListId: name,
   };
-
-  // Create team config file
-  const teamsDir = getTeamsDir();
-  writeFileSync(join(teamsDir, `${name}.json`), JSON.stringify(team, null, 2), "utf-8");
-
-  // Create task list directory
-  const taskDir = join(getTasksDir(), name);
-  if (!existsSync(taskDir)) mkdirSync(taskDir, { recursive: true });
-
-  return team;
 }
 
 export function getTeam(name: string): Team | null {
-  const path = join(getTeamsDir(), `${name}.json`);
-  if (!existsSync(path)) return null;
-  try { return JSON.parse(readFileSync(path, "utf-8")); } catch { return null; }
+  const row = dbGet<any>(`SELECT * FROM teams WHERE name = ?`, [name]);
+  if (!row) return null;
+
+  const members = dbAll<any>(
+    `SELECT * FROM team_members WHERE team_name = ?`,
+    [name],
+  );
+
+  return {
+    name: row.name,
+    description: row.description ?? undefined,
+    createdAt: row.created_at ?? "",
+    taskListId: row.task_list_id ?? row.name,
+    members: members.map((m: any) => ({
+      name: m.agent_name,
+      agentId: m.agent_name,
+      role: m.role ?? undefined,
+      status: m.status ?? "idle",
+      currentTask: m.current_task ?? undefined,
+    })),
+  };
 }
 
 export function addTeamMember(teamName: string, member: TeamMember): void {
-  const team = getTeam(teamName);
-  if (!team) return;
-  team.members = team.members.filter(m => m.name !== member.name);
-  team.members.push(member);
-  writeFileSync(join(getTeamsDir(), `${teamName}.json`), JSON.stringify(team, null, 2), "utf-8");
+  // Upsert: remove existing entry for this agent, then insert
+  dbRun(
+    `DELETE FROM team_members WHERE team_name = ? AND agent_name = ?`,
+    [teamName, member.name],
+  );
+  dbRun(
+    `INSERT INTO team_members (team_name, agent_name, role, status, current_task) VALUES (?, ?, ?, ?, ?)`,
+    [teamName, member.name, member.role ?? null, member.status, member.currentTask ?? null],
+  );
 }
 
 export function updateMemberStatus(teamName: string, memberName: string, status: TeamMember["status"]): void {
-  const team = getTeam(teamName);
-  if (!team) return;
-  const member = team.members.find(m => m.name === memberName);
-  if (member) {
-    member.status = status;
-    writeFileSync(join(getTeamsDir(), `${teamName}.json`), JSON.stringify(team, null, 2), "utf-8");
-  }
+  dbRun(
+    `UPDATE team_members SET status = ? WHERE team_name = ? AND agent_name = ?`,
+    [status, teamName, memberName],
+  );
 }
 
 export function listTeams(): string[] {
-  const dir = getTeamsDir();
-  if (!existsSync(dir)) return [];
-  const { readdirSync } = require("fs");
-  return readdirSync(dir)
-    .filter((f: string) => f.endsWith(".json"))
-    .map((f: string) => f.replace(".json", ""));
+  const rows = dbAll<any>(`SELECT name FROM teams`);
+  return rows.map((r: any) => r.name);
 }

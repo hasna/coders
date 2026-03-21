@@ -20,11 +20,20 @@ const deferredTools = new Map<string, DeferredToolInfo>();
 const disabledTools = new Set<string>();
 const mcpTools = new Map<string, Tool>();
 
+/** Full JSON schemas for deferred tools — populated by the UI layer, read by ToolSearch */
+const deferredToolSchemas = new Map<string, DeferredToolSchema>();
+
 export interface DeferredToolInfo {
   name: string;
   searchHint: string;
   description: string;
   loader: () => Promise<Tool>;
+}
+
+export interface DeferredToolSchema {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
 }
 
 // ── Registration ───────────────────────────────────────────────────
@@ -71,6 +80,13 @@ export function unregisterMcpTool(name: string): void {
  */
 export function clearMcpTools(): void {
   mcpTools.clear();
+}
+
+/**
+ * Get all registered MCP tools.
+ */
+export function getMcpTools(): Tool[] {
+  return [...mcpTools.values()];
 }
 
 // ── Lookup ─────────────────────────────────────────────────────────
@@ -150,6 +166,85 @@ export function getAllToolNames(): string[] {
  */
 export function getDeferredToolInfos(): DeferredToolInfo[] {
   return [...deferredTools.values()];
+}
+
+/**
+ * Store the full JSON schema for a deferred tool.
+ * Called by the UI layer when splitting tools into immediate/deferred groups.
+ */
+export function setDeferredToolSchema(schema: DeferredToolSchema): void {
+  deferredToolSchemas.set(schema.name, schema);
+}
+
+/**
+ * Store multiple deferred tool schemas at once.
+ */
+export function setDeferredToolSchemas(schemas: DeferredToolSchema[]): void {
+  for (const s of schemas) {
+    deferredToolSchemas.set(s.name, s);
+  }
+}
+
+/**
+ * Get a deferred tool's full schema by name.
+ */
+export function getDeferredToolSchema(name: string): DeferredToolSchema | undefined {
+  return deferredToolSchemas.get(name);
+}
+
+/**
+ * Get all deferred tool schemas.
+ */
+export function getAllDeferredToolSchemas(): DeferredToolSchema[] {
+  return [...deferredToolSchemas.values()];
+}
+
+/**
+ * Search deferred tool schemas by keyword matching.
+ * Returns matching schemas sorted by relevance.
+ */
+export function searchDeferredToolSchemas(query: string, maxResults = 5): DeferredToolSchema[] {
+  const queryLower = query.toLowerCase();
+  const queryTerms = queryLower.split(/\s+/);
+
+  // Support "select:Name1,Name2" syntax for exact name lookup
+  if (queryLower.startsWith("select:")) {
+    const names = query.slice(7).split(",").map(n => n.trim());
+    return names
+      .map(n => deferredToolSchemas.get(n))
+      .filter((s): s is DeferredToolSchema => s !== undefined);
+  }
+
+  // Support "+required term" syntax: require the prefixed word in the name
+  const requiredTerms = queryTerms.filter(t => t.startsWith("+")).map(t => t.slice(1));
+  const searchTerms = queryTerms.filter(t => !t.startsWith("+"));
+
+  const results: Array<{ schema: DeferredToolSchema; score: number }> = [];
+
+  for (const schema of deferredToolSchemas.values()) {
+    const nameLower = schema.name.toLowerCase();
+    const descLower = schema.description.toLowerCase();
+
+    // Check required terms — all must be in the name
+    if (requiredTerms.length > 0 && !requiredTerms.every(rt => nameLower.includes(rt))) {
+      continue;
+    }
+
+    let score = 0;
+    const allTerms = searchTerms.length > 0 ? searchTerms : requiredTerms;
+    for (const term of allTerms) {
+      if (nameLower === term) score += 10;
+      else if (nameLower.includes(term)) score += 5;
+      if (descLower.includes(term)) score += 3;
+    }
+
+    if (score > 0) {
+      results.push({ schema, score });
+    }
+  }
+
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, maxResults).map(r => r.schema);
 }
 
 /**
@@ -248,6 +343,7 @@ export function isWriteTool(name: string): boolean {
 export function resetRegistry(): void {
   registeredTools.clear();
   deferredTools.clear();
+  deferredToolSchemas.clear();
   disabledTools.clear();
   mcpTools.clear();
 }

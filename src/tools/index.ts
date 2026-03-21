@@ -33,7 +33,13 @@ export {
   isReadOnlyTool,
   isWriteTool,
   resetRegistry,
+  setDeferredToolSchema,
+  setDeferredToolSchemas,
+  getDeferredToolSchema,
+  getAllDeferredToolSchemas,
+  searchDeferredToolSchemas,
   type DeferredToolInfo,
+  type DeferredToolSchema,
 } from "./registry.js";
 
 export {

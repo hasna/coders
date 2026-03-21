@@ -31,6 +31,9 @@ export const EXIT_WORKTREE_TOOL = "ExitWorktree" as const;
 export const TOOL_SEARCH_TOOL = "ToolSearch" as const;
 export const SEND_MESSAGE_TOOL = "SendMessage" as const;
 export const CONFIG_TOOL = "Config" as const;
+export const LIST_MCP_RESOURCES_TOOL = "ListMcpResourcesTool" as const;
+export const READ_MCP_RESOURCE_TOOL = "ReadMcpResourceTool" as const;
+export const SKILL_TOOL = "Skill" as const;
 
 // Read-only tools (safe for speculation and plan mode)
 export const READ_ONLY_TOOLS = new Set([
@@ -41,6 +44,9 @@ export const READ_ONLY_TOOLS = new Set([
   LSP_TOOL,
   TASK_GET_TOOL,
   TASK_LIST_TOOL,
+  LIST_MCP_RESOURCES_TOOL,
+  READ_MCP_RESOURCE_TOOL,
+  SKILL_TOOL,
 ]);
 
 // Write-class tools

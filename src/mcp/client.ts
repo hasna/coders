@@ -170,6 +170,21 @@ export function isServerConnected(name: string): boolean {
   return connectedServers.has(name);
 }
 
+/**
+ * Get the raw MCP Client for a connected server (for resources, prompts, etc.).
+ */
+export function getServerClient(name: string): Client | null {
+  const server = connectedServers.get(name);
+  return server?.client ?? null;
+}
+
+/**
+ * Get all connected server names.
+ */
+export function getConnectedServerNames(): string[] {
+  return [...connectedServers.keys()];
+}
+
 // ── Wrap MCP tool as internal Tool ─────────────────────────────────
 
 function wrapMcpTool(serverName: string, mcpTool: McpToolDef, client: Client): Tool {

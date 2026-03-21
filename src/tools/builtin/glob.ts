@@ -8,7 +8,7 @@
  *   - Optional directory scoping
  */
 import fg from "fast-glob";
-import { statSync } from "fs";
+import { statSync, existsSync } from "fs";
 import { resolve, isAbsolute } from "path";
 import { z } from "zod";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
@@ -78,6 +78,17 @@ export const globTool: Tool<GlobInput, GlobOutput> = {
 
   async call(input, context): Promise<ToolCallResult<GlobOutput>> {
     const cwd = input.path ? resolvePath(input.path) : process.cwd();
+
+    // Validate that the search directory exists before attempting glob
+    if (input.path && !existsSync(cwd)) {
+      return {
+        data: {
+          files: [],
+          totalMatches: 0,
+          truncated: false,
+        },
+      };
+    }
 
     try {
       const allFiles = await fg(input.pattern, {

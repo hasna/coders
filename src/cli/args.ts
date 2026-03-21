@@ -24,6 +24,7 @@ export interface CliOptions {
   agentName?: string;
   teamName?: string;
   parentSessionId?: string;
+  resume?: string | boolean;
   inputFormat?: "text" | "stream-json";
   outputFormat?: "text" | "json" | "stream-json";
 }
@@ -43,6 +44,7 @@ export function resolveOptions(raw: Record<string, unknown>): CliOptions {
     agentName: raw.agentName as string | undefined,
     teamName: raw.teamName as string | undefined,
     parentSessionId: raw.parentSessionId as string | undefined,
+    resume: raw.resume as string | boolean | undefined,
     inputFormat: raw.inputFormat as CliOptions["inputFormat"],
     outputFormat: raw.outputFormat as CliOptions["outputFormat"],
   };

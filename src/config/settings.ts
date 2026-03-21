@@ -83,7 +83,7 @@ export const SettingsSchema = z.object({
 
   // Permissions
   permissions: z.object({
-    defaultMode: z.enum(["default", "plan", "acceptEdits", "dontAsk", "auto"]).optional(),
+    defaultMode: z.enum(["default", "plan", "acceptEdits", "dontAsk", "auto", "bypassPermissions"]).optional(),
     allow: z.array(PermissionRuleSchema).optional(),
     deny: z.array(PermissionRuleSchema).optional(),
   }).optional(),
@@ -99,6 +99,12 @@ export const SettingsSchema = z.object({
   editorMode: z.enum(["default", "vim", "emacs"]).optional(),
   verbose: z.boolean().optional(),
   showTurnDuration: z.boolean().optional(),
+
+  // Thinking
+  thinking: z.object({
+    enabled: z.boolean(),
+    budgetTokens: z.number().optional(),
+  }).optional(),
 
   // Features
   autoCompactEnabled: z.boolean().optional(),
@@ -141,6 +147,13 @@ export const SettingsSchema = z.object({
 
   // Remote control
   remoteControlAtStartup: z.boolean().optional(),
+
+  // Custom status line — run an external command to render the status bar
+  statusLine: z.object({
+    type: z.literal("command"),
+    command: z.string(),
+    padding: z.number().optional(),
+  }).optional(),
 }).passthrough(); // Allow unknown keys for forward compat
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -151,7 +164,7 @@ export const DEFAULT_SETTINGS: Settings = {
   model: null,
   alwaysThinkingEnabled: undefined,
   permissions: {
-    defaultMode: "default",
+    defaultMode: "bypassPermissions",
     allow: [],
     deny: [],
   },
@@ -161,6 +174,7 @@ export const DEFAULT_SETTINGS: Settings = {
   editorMode: "default",
   verbose: false,
   showTurnDuration: false,
+  thinking: undefined,
   autoCompactEnabled: true,
   autoMemoryEnabled: true,
   fileCheckpointingEnabled: true,

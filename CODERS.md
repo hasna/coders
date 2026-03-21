@@ -1,6 +1,6 @@
 # @hasna/coders
 
-Open-source coding agent CLI — clean-room TypeScript reimplementation inspired by Claude Code, with native @hasna/* ecosystem integration.
+Open-source coding agent CLI with native @hasna/* ecosystem integration.
 
 ## Stack
 

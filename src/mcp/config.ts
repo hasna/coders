@@ -15,6 +15,11 @@ import { getSettings } from "../config/loader.js";
 
 export type McpConfigScope = "local" | "user" | "project";
 
+export interface McpServerConfigWithScope extends McpServerConfig {
+  scope: McpConfigScope;
+  configPath: string;
+}
+
 interface RawMcpServerEntry {
   command?: string;
   args?: string[];
@@ -71,6 +76,54 @@ export function loadMcpConfigs(projectRoot?: string): McpServerConfig[] {
 }
 
 /**
+ * Load all MCP server configs with scope metadata for display.
+ */
+export function loadMcpConfigsWithScope(projectRoot?: string): McpServerConfigWithScope[] {
+  const configs: McpServerConfigWithScope[] = [];
+  const seen = new Set<string>();
+
+  // 1. User settings (~/.coders/settings.json mcpServers)
+  const userSettingsPath = join(getConfigDir(), "settings.json");
+  const settings = getSettings();
+  if (settings.mcpServers) {
+    for (const [name, entry] of Object.entries(settings.mcpServers)) {
+      if (!seen.has(name)) {
+        configs.push({ ...entryToConfig(name, entry), scope: "user", configPath: userSettingsPath });
+        seen.add(name);
+      }
+    }
+  }
+
+  // 2. Project .mcp.json
+  if (projectRoot) {
+    const mcpJsonPath = join(projectRoot, ".mcp.json");
+    const mcpJson = loadJsonFile(mcpJsonPath) as { mcpServers?: Record<string, RawMcpServerEntry> } | null;
+    if (mcpJson?.mcpServers) {
+      for (const [name, entry] of Object.entries(mcpJson.mcpServers)) {
+        if (!seen.has(name)) {
+          configs.push({ ...entryToConfig(name, entry), scope: "project", configPath: mcpJsonPath });
+          seen.add(name);
+        }
+      }
+    }
+  }
+
+  // 3. User global MCP config (~/.coders/.mcp.json) = "local" scope
+  const globalMcpPath = join(getConfigDir(), ".mcp.json");
+  const globalMcp = loadJsonFile(globalMcpPath) as { mcpServers?: Record<string, RawMcpServerEntry> } | null;
+  if (globalMcp?.mcpServers) {
+    for (const [name, entry] of Object.entries(globalMcp.mcpServers)) {
+      if (!seen.has(name)) {
+        configs.push({ ...entryToConfig(name, entry), scope: "local", configPath: globalMcpPath });
+        seen.add(name);
+      }
+    }
+  }
+
+  return configs;
+}
+
+/**
  * Add an MCP server config to a specific scope.
  */
 export function addMcpServerConfig(
@@ -118,28 +171,43 @@ export function addMcpServerConfig(
 }
 
 /**
- * Remove an MCP server config.
+ * Remove an MCP server config from all scopes (or a specific scope).
  */
-export function removeMcpServerConfig(name: string): boolean {
+export function removeMcpServerConfig(name: string, projectRoot?: string, scope?: McpConfigScope): boolean {
   let removed = false;
+  const { writeFileSync: fsWrite } = require("fs") as typeof import("fs");
 
   // Check user settings
-  const { getUserSettings, saveUserSettings } = require("../config/loader.js");
-  const settings = getUserSettings();
-  if (settings.mcpServers?.[name]) {
-    delete settings.mcpServers[name];
-    saveUserSettings({ mcpServers: settings.mcpServers });
-    removed = true;
+  if (!scope || scope === "user") {
+    const { getUserSettings: getUS, saveUserSettings: saveUS } = require("../config/loader.js");
+    const settings = getUS();
+    if (settings.mcpServers?.[name]) {
+      delete settings.mcpServers[name];
+      saveUS({ mcpServers: settings.mcpServers });
+      removed = true;
+    }
   }
 
-  // Check local config
-  const localPath = join(getConfigDir(), ".mcp.json");
-  const localMcp = loadJsonFile(localPath) as { mcpServers?: Record<string, unknown> } | null;
-  if (localMcp?.mcpServers?.[name]) {
-    delete localMcp.mcpServers[name];
-    const { writeFileSync } = require("fs");
-    writeFileSync(localPath, JSON.stringify(localMcp, null, 2) + "\n", "utf-8");
-    removed = true;
+  // Check project .mcp.json
+  if ((!scope || scope === "project") && projectRoot) {
+    const projectMcpPath = join(projectRoot, ".mcp.json");
+    const projectMcp = loadJsonFile(projectMcpPath) as { mcpServers?: Record<string, unknown> } | null;
+    if (projectMcp?.mcpServers?.[name]) {
+      delete projectMcp.mcpServers[name];
+      fsWrite(projectMcpPath, JSON.stringify(projectMcp, null, 2) + "\n", "utf-8");
+      removed = true;
+    }
+  }
+
+  // Check local config (~/.coders/.mcp.json)
+  if (!scope || scope === "local") {
+    const localPath = join(getConfigDir(), ".mcp.json");
+    const localMcp = loadJsonFile(localPath) as { mcpServers?: Record<string, unknown> } | null;
+    if (localMcp?.mcpServers?.[name]) {
+      delete localMcp.mcpServers[name];
+      fsWrite(localPath, JSON.stringify(localMcp, null, 2) + "\n", "utf-8");
+      removed = true;
+    }
   }
 
   return removed;

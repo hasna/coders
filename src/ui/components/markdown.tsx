@@ -181,26 +181,32 @@ function renderBlockquote(token: Tokens.Blockquote): string[] {
 function renderTable(token: Tokens.Table, maxWidth: number): string[] {
   const lines: string[] = [];
 
-  // Calculate column widths
-  const colWidths: number[] = token.header.map((h) => h.text.length);
+  // Strip inline markdown to get raw text length for column sizing
+  const stripMd = (s: string) => s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+
+  // Calculate column widths from raw text (no ANSI)
+  const colWidths: number[] = token.header.map((h) => stripMd(h.text).length);
   for (const row of token.rows) {
     for (let i = 0; i < row.length; i++) {
-      colWidths[i] = Math.max(colWidths[i] ?? 0, row[i].text.length);
+      colWidths[i] = Math.max(colWidths[i] ?? 0, stripMd(row[i].text).length);
     }
   }
 
-  // Cap widths to fit terminal
-  const totalWidth = colWidths.reduce((a, b) => a + b, 0) + colWidths.length * 3 + 1;
-  if (totalWidth > maxWidth) {
-    const scale = maxWidth / totalWidth;
+  // Cap widths to fit terminal — leave room for separators
+  const overhead = colWidths.length * 3 + 1;
+  const maxTable = maxWidth - 4; // 2 margin each side
+  const totalWidth = colWidths.reduce((a, b) => a + b, 0) + overhead;
+  if (totalWidth > maxTable) {
+    const available = maxTable - overhead;
+    const total = colWidths.reduce((a, b) => a + b, 0);
     for (let i = 0; i < colWidths.length; i++) {
-      colWidths[i] = Math.max(3, Math.floor(colWidths[i] * scale));
+      colWidths[i] = Math.max(4, Math.floor((colWidths[i] / total) * available));
     }
   }
 
-  // Header
+  // Header — render inline markdown, then pad
   const headerLine = token.header
-    .map((h, i) => pad(h.text, colWidths[i]))
+    .map((h, i) => padRendered(renderInline(h.text), stripMd(h.text), colWidths[i]))
     .join(` ${FG_GRAY}│${FG_DEFAULT} `);
   lines.push(`${BOLD}${headerLine}${BOLD_OFF}`);
 
@@ -208,15 +214,25 @@ function renderTable(token: Tokens.Table, maxWidth: number): string[] {
   const sepLine = colWidths.map((w) => "─".repeat(w)).join(`─┼─`);
   lines.push(`${FG_GRAY}${sepLine}${FG_DEFAULT}`);
 
-  // Rows
+  // Rows — render inline markdown in each cell
   for (const row of token.rows) {
     const rowLine = row
-      .map((cell, i) => pad(cell.text, colWidths[i]))
+      .map((cell, i) => padRendered(renderInline(cell.text), stripMd(cell.text), colWidths[i]))
       .join(` ${FG_GRAY}│${FG_DEFAULT} `);
     lines.push(rowLine);
   }
 
   return lines;
+}
+
+/** Pad an ANSI-rendered string based on its visible (plain) length */
+function padRendered(rendered: string, plain: string, width: number): string {
+  if (plain.length >= width) {
+    // Need to truncate — use plain text to find cut point
+    const truncPlain = plain.slice(0, width - 1) + "…";
+    return renderInline(truncPlain);
+  }
+  return rendered + " ".repeat(width - plain.length);
 }
 
 // ── Inline rendering ───────────────────────────────────────────────

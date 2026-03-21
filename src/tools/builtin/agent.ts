@@ -11,12 +11,16 @@
  *   - Continue existing agents via SendMessage
  */
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
-import type { PermissionResult } from "../../config/permissions.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import { AGENT_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
-import { runAgentLoop, type AgentLoopOptions, type ToolHandler } from "../../core/agent-loop.js";
+import { runAgentLoop, type ToolHandler } from "../../core/agent-loop.js";
 import { getApiClient } from "../../api/client.js";
-import { resolveModelId } from "../../api/models.js";
+import {
+  createTask as createBgTask,
+  completeTask as completeBgTask,
+  failTask as failBgTask,
+  updateTask as updateBgTask,
+} from "../../core/background-tasks.js";
 
 // ── Agent types and their available tools ──────────────────────────
 
@@ -184,7 +188,7 @@ export const agentTool: Tool<AgentInput, AgentOutput> = {
         inputSchema: { type: "object" as const, properties: {} },
         isReadOnly: t.isReadOnly(),
         isConcurrencySafe: t.isConcurrencySafe(),
-        call: async (toolInput: Record<string, unknown>, toolCtx: any) => {
+        call: async (toolInput: Record<string, unknown>, _toolCtx: any) => {
           const result = await t.call(toolInput, context);
           return { data: result.data };
         },
@@ -194,12 +198,15 @@ export const agentTool: Tool<AgentInput, AgentOutput> = {
     const systemPrompt = buildSubAgentSystemPrompt(agentType, typeDef);
 
     if (input.run_in_background) {
+      // Register with the background task manager
+      const bgTask = createBgTask("agent", input.prompt.slice(0, 100));
+
       // Background execution
-      runAgentInBackground(agentId, agentRecord, input, toolHandlers, systemPrompt, model, context);
+      runAgentInBackground(agentId, bgTask.id, agentRecord, input, toolHandlers, systemPrompt, model, context);
 
       return {
         data: {
-          result: `Agent ${agentId} (${agentType}) started in background. You will be notified when it completes.`,
+          result: `Agent ${agentId} (${agentType}) started in background. Task ID: ${bgTask.id}. Use TaskOutput to check its status.`,
           agentId,
           agentType,
           model,
@@ -241,7 +248,10 @@ export const agentTool: Tool<AgentInput, AgentOutput> = {
           agentType,
           model,
           totalTurns: loopResult.totalTurns,
-          usage: loopResult.usage,
+          usage: {
+            inputTokens: loopResult.usage.totalInputTokens,
+            outputTokens: loopResult.usage.totalOutputTokens,
+          },
         },
       };
     } catch (error) {
@@ -288,7 +298,7 @@ function filterToolsForAgentType(tools: Tool[], typeDef: AgentTypeDefinition): T
   return tools.filter((t) => allowed.has(t.name) && !excluded.has(t.name));
 }
 
-function buildSubAgentSystemPrompt(agentType: string, typeDef: AgentTypeDefinition): string {
+function buildSubAgentSystemPrompt(_agentType: string, typeDef: AgentTypeDefinition): string {
   return `You are a ${typeDef.description}
 
 You are a sub-agent spawned to handle a specific task. Complete the task thoroughly and return your findings/results.
@@ -314,6 +324,7 @@ function extractText(message: { role: string; content: string | unknown[] } | un
 
 function runAgentInBackground(
   agentId: string,
+  bgTaskId: string,
   record: RunningAgent,
   input: AgentInput,
   tools: ToolHandler[],
@@ -335,14 +346,37 @@ function runAgentInBackground(
       permissionContext: parentContext.getAppState().toolPermissionContext,
       agentId,
       maxTurns: 25,
+      onTextDelta: (_text) => {
+        // Track progress in the background task manager
+        updateBgTask(bgTaskId, {
+          progress: {
+            lastActivity: new Date().toISOString(),
+          },
+        });
+      },
     },
   ).then((result) => {
     const lastAssistant = [...result.messages].reverse().find((m) => m.role === "assistant");
+    const resultText = extractText(lastAssistant);
     record.status = "completed";
-    record.result = extractText(lastAssistant);
+    record.result = resultText;
+
+    // Update background task manager
+    const totalTokens = result.usage.totalInputTokens + result.usage.totalOutputTokens;
+    updateBgTask(bgTaskId, {
+      progress: {
+        tokenCount: totalTokens,
+        lastActivity: new Date().toISOString(),
+      },
+    });
+    completeBgTask(bgTaskId, resultText);
   }).catch((error) => {
+    const errorMsg = error instanceof Error ? error.message : String(error);
     record.status = "failed";
-    record.error = error instanceof Error ? error.message : String(error);
+    record.error = errorMsg;
+
+    // Update background task manager
+    failBgTask(bgTaskId, errorMsg);
   });
 }
 

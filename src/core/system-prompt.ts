@@ -14,6 +14,7 @@
 import { buildInstructionsPrompt } from "../memory/files.js";
 import type { ToolPermissionContext } from "../config/permissions.js";
 import type { Tool } from "../tools/interface.js";
+import { discoverSkills } from "../tools/builtin/skill.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -22,6 +23,8 @@ export interface SystemPromptContext {
   model: string;
   permissionMode: string;
   tools: Array<{ name: string; prompt: string }>;
+  /** Deferred tools — not sent in the API tools array, discoverable via ToolSearch */
+  deferredTools?: Array<{ name: string; description: string }>;
   gitBranch?: string;
   teamName?: string;
   agentName?: string;
@@ -111,7 +114,26 @@ Use ExitPlanMode when your plan is ready for approval.`);
     }
   }
 
-  // 5. Session context
+  // 5. Deferred tools (available via ToolSearch)
+  if (ctx.deferredTools && ctx.deferredTools.length > 0) {
+    const deferredList = ctx.deferredTools
+      .map((t) => `- **${t.name}**: ${t.description}`)
+      .join("\n");
+    sections.push(`\n# Deferred Tools\n\nThe following tools are available but not loaded by default. Use the ToolSearch tool to fetch their full schemas before calling them. Once you call ToolSearch for a tool, you can use it normally.\n\n${deferredList}`);
+  }
+
+  // 6. Available skills
+  try {
+    const skills = discoverSkills(ctx.projectDir);
+    if (skills.length > 0) {
+      const skillList = skills
+        .map((s) => `- **${s.name}**${s.description ? `: ${s.description}` : ""} _(${s.source})_`)
+        .join("\n");
+      sections.push(`\n# Available Skills\n\nThe following skills are available via the Skill tool. When a user references a skill by name or uses "/<skill-name>", invoke it with the Skill tool.\n\n${skillList}`);
+    }
+  } catch { /* skill discovery is non-blocking */ }
+
+  // 7. Session context
   const ctxParts: string[] = [];
   ctxParts.push(`Working directory: ${ctx.projectDir}`);
   ctxParts.push(`Model: ${ctx.model}`);
@@ -120,7 +142,7 @@ Use ExitPlanMode when your plan is ready for approval.`);
   if (ctx.agentName) ctxParts.push(`Agent: ${ctx.agentName}`);
   sections.push(`\n# Session\n${ctxParts.join("\n")}`);
 
-  // 6. Active tasks
+  // 8. Active tasks
   if (ctx.activeTasks && ctx.activeTasks.length > 0) {
     const taskList = ctx.activeTasks
       .map((t) => `- [${t.status}] #${t.id}: ${t.subject}`)
@@ -128,7 +150,7 @@ Use ExitPlanMode when your plan is ready for approval.`);
     sections.push(`\n# Active Tasks\n${taskList}`);
   }
 
-  // 7. Custom instructions (from settings)
+  // 9. Custom instructions (from settings)
   if (ctx.customInstructions) {
     sections.push(`\n# Custom Instructions\n${ctx.customInstructions}`);
   }
@@ -195,7 +217,7 @@ let _cachedPrompt: string | null = null;
 let _cacheKey: string | null = null;
 
 export function getCachedSystemPrompt(ctx: SystemPromptContext): string {
-  const key = `${ctx.projectDir}:${ctx.model}:${ctx.permissionMode}:${ctx.tools.length}`;
+  const key = `${ctx.projectDir}:${ctx.model}:${ctx.permissionMode}:${ctx.tools.length}:${ctx.deferredTools?.length ?? 0}`;
   if (_cacheKey === key && _cachedPrompt) return _cachedPrompt;
   _cachedPrompt = buildSystemPrompt(ctx);
   _cacheKey = key;

@@ -23,3 +23,12 @@ export {
   removeMcpServerConfig,
   type McpConfigScope,
 } from "./config.js";
+
+export {
+  initMcpServers,
+  type McpInitResult,
+} from "./init.js";
+
+export {
+  mcpToolsToHandlers,
+} from "./handlers.js";

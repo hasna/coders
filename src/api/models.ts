@@ -10,6 +10,9 @@ export interface ModelVariants {
   bedrock: string;
   vertex: string;
   foundry?: string;
+  xai?: string;
+  together?: string;
+  gemini?: string;
 }
 
 export interface ModelEntry {
@@ -142,6 +145,77 @@ export const MODEL_REGISTRY: Record<string, ModelEntry> = {
     supportsThinking: true,
     supportsVision: true,
   },
+
+  // ── xAI Grok models ──────────────────────────────────────────────
+
+  grok3: {
+    alias: "grok3",
+    variants: {
+      firstParty: "grok-3",
+      bedrock: "grok-3",
+      vertex: "grok-3",
+      xai: "grok-3",
+    },
+    contextWindow: 131_072,
+    maxOutput: 16_384,
+    supportsThinking: true,
+    supportsVision: false,
+  },
+  grok3mini: {
+    alias: "grok3mini",
+    variants: {
+      firstParty: "grok-3-mini",
+      bedrock: "grok-3-mini",
+      vertex: "grok-3-mini",
+      xai: "grok-3-mini",
+    },
+    contextWindow: 131_072,
+    maxOutput: 16_384,
+    supportsThinking: true,
+    supportsVision: false,
+  },
+  grok2: {
+    alias: "grok2",
+    variants: {
+      firstParty: "grok-2",
+      bedrock: "grok-2",
+      vertex: "grok-2",
+      xai: "grok-2",
+    },
+    contextWindow: 131_072,
+    maxOutput: 8_192,
+    supportsThinking: false,
+    supportsVision: true,
+  },
+
+  // ── Google Gemini models ──────────────────────────────────────────
+
+  gemini25pro: {
+    alias: "gemini25pro",
+    variants: {
+      firstParty: "gemini-2.5-pro",
+      bedrock: "gemini-2.5-pro",
+      vertex: "gemini-2.5-pro",
+      gemini: "gemini-2.5-pro",
+    },
+    contextWindow: 1_000_000,
+    maxOutput: 65_536,
+    supportsThinking: true,
+    supportsVision: true,
+  },
+  gemini25flash: {
+    alias: "gemini25flash",
+    variants: {
+      firstParty: "gemini-2.5-flash",
+      bedrock: "gemini-2.5-flash",
+      vertex: "gemini-2.5-flash",
+      gemini: "gemini-2.5-flash",
+    },
+    contextWindow: 1_000_000,
+    maxOutput: 65_536,
+    supportsThinking: true,
+    supportsVision: true,
+  },
 };
 
 // ── User-facing aliases ────────────────────────────────────────────
@@ -152,6 +226,17 @@ const USER_ALIASES: Record<string, string> = {
   opus: "opus46",
   "sonnet[1m]": "sonnet46",
   "opus[1m]": "opus46",
+  // xAI Grok aliases
+  grok: "grok3",
+  "grok-3": "grok3",
+  "grok-3-mini": "grok3mini",
+  "grok-2": "grok2",
+  // Gemini aliases
+  gemini: "gemini25pro",
+  "gemini-pro": "gemini25pro",
+  "gemini-flash": "gemini25flash",
+  "gemini-2.5-pro": "gemini25pro",
+  "gemini-2.5-flash": "gemini25flash",
 };
 
 /**
@@ -160,7 +245,7 @@ const USER_ALIASES: Record<string, string> = {
  */
 export function resolveModelId(
   model: string,
-  provider: "firstParty" | "bedrock" | "vertex" | "foundry" = "firstParty",
+  provider: "firstParty" | "bedrock" | "vertex" | "foundry" | "xai" | "together" | "gemini" = "firstParty",
 ): string {
   // Check if it's a user alias first
   const aliasKey = USER_ALIASES[model] ?? model;

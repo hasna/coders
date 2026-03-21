@@ -1,7 +1,7 @@
 {
   "name": "@hasna/coders",
-  "version": "0.1.2",
-  "description": "Open-source coding agent CLI — inspired by Claude Code, improved with native @hasna/* ecosystem integration",
+  "version": "0.2.0",
+  "description": "Open-source coding agent CLI with native @hasna/* ecosystem integration",
   "type": "module",
   "bin": {
     "coders": "./dist/cli.js"

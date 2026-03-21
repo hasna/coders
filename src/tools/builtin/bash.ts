@@ -21,6 +21,12 @@ import {
   DEFAULT_MAX_RESULT_SIZE_CHARS,
 } from "../../core/constants.js";
 import { dbRun } from "../../db/index.js";
+import {
+  createTask as createBgTask,
+  completeTask as completeBgTask,
+  failTask as failBgTask,
+  writeTaskOutput,
+} from "../../core/background-tasks.js";
 
 // ── Dangerous command patterns (always blocked) ────────────────────
 
@@ -34,8 +40,9 @@ const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\b:(){ :\|:& };:/,        reason: "Fork bomb" },
   { pattern: /\bchmod\s+-R\s+777\s+\//,reason: "Recursive chmod 777 on root" },
   { pattern: /\bchown\s+-R\s+.*\s+\//,  reason: "Recursive chown on root" },
-  { pattern: /\bcurl\s.*\|\s*sh\b/,     reason: "Pipe remote script to shell" },
-  { pattern: /\bwget\s.*\|\s*sh\b/,     reason: "Pipe remote script to shell" },
+  { pattern: /\b(curl|wget)\s.*\|\s*(sh|bash|zsh|ksh)\b/, reason: "Pipe remote script to shell" },
+  { pattern: /\bdd\s+if=/, reason: "Direct disk copy" },
+  { pattern: /\bsudo\s+rm\s+-rf\b/, reason: "Recursive delete as root" },
   { pattern: /\b\/etc\/passwd\b/,        reason: "Access to passwd file" },
   { pattern: /\b\/etc\/shadow\b/,        reason: "Access to shadow file" },
 ];
@@ -308,7 +315,8 @@ export const bashTool: Tool<BashInput, BashOutput> = {
 
     // Background execution
     if (run_in_background) {
-      const taskId = `bg-${nextBgId++}`;
+      const bgTask = createBgTask("bash", command);
+      const taskId = bgTask.id;
       const child = spawn(command, [], {
         shell: getShell(),
         cwd: process.cwd(),
@@ -317,9 +325,18 @@ export const bashTool: Tool<BashInput, BashOutput> = {
       });
 
       let output = "";
-      child.stdout?.on("data", (data: Buffer) => { output += data.toString(); });
-      child.stderr?.on("data", (data: Buffer) => { output += data.toString(); });
+      child.stdout?.on("data", (data: Buffer) => {
+        const chunk = data.toString();
+        output += chunk;
+        writeTaskOutput(taskId, chunk);
+      });
+      child.stderr?.on("data", (data: Buffer) => {
+        const chunk = data.toString();
+        output += chunk;
+        writeTaskOutput(taskId, chunk);
+      });
 
+      // Also keep in the legacy map for backward compat
       const task = { process: child, output: "", done: false, exitCode: null as number | null };
       backgroundTasks.set(taskId, task);
 
@@ -327,11 +344,18 @@ export const bashTool: Tool<BashInput, BashOutput> = {
         task.output = output;
         task.done = true;
         task.exitCode = code;
+        completeBgTask(taskId, output, code ?? undefined);
+      });
+
+      child.on("error", (err) => {
+        task.done = true;
+        task.exitCode = 1;
+        failBgTask(taskId, err.message);
       });
 
       return {
         data: {
-          stdout: `Background task started with ID: ${taskId}`,
+          stdout: `Background task started with ID: ${taskId}. Use TaskOutput to check its status.`,
           stderr: "",
           exitCode: null,
           interrupted: false,
@@ -352,7 +376,6 @@ export const bashTool: Tool<BashInput, BashOutput> = {
         cwd: process.cwd(),
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
-        timeout: timeoutMs,
       });
 
       child.stdout?.on("data", (data: Buffer) => {
@@ -363,6 +386,13 @@ export const bashTool: Tool<BashInput, BashOutput> = {
         stderr += data.toString();
       });
 
+      // Enforce timeout — spawn() does NOT support timeout option natively
+      const timeoutTimer = setTimeout(() => {
+        interrupted = true;
+        child.kill("SIGTERM");
+        setTimeout(() => child.kill("SIGKILL"), 3000);
+      }, timeoutMs);
+
       // Handle abort
       const onAbort = () => {
         interrupted = true;
@@ -372,6 +402,7 @@ export const bashTool: Tool<BashInput, BashOutput> = {
       context.abortController?.signal.addEventListener("abort", onAbort, { once: true });
 
       child.on("close", (code, signal) => {
+        clearTimeout(timeoutTimer);
         context.abortController?.signal.removeEventListener("abort", onAbort);
         const durationMs = performance.now() - startTime;
 

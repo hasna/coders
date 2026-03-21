@@ -8,7 +8,7 @@
  *   - Generates structured patch and git diff
  *   - Validates old_string uniqueness
  */
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, statSync } from "fs";
 import { dirname } from "path";
 import { mkdirSync } from "fs";
 import { resolve, isAbsolute } from "path";
@@ -138,6 +138,25 @@ export const editTool: Tool<EditInput, EditOutput> = {
       return { data: { filePath: input.file_path, oldString: "", newString: "", replacements: 0, originalFile: "" } };
     }
     const resolved = resolvePath(input.file_path);
+
+    // Guard against reading extremely large files (>50MB)
+    const MAX_FILE_SIZE = 50 * 1024 * 1024;
+    try {
+      const fileSize = statSync(resolved).size;
+      if (fileSize > MAX_FILE_SIZE) {
+        return {
+          data: {
+            filePath: resolved,
+            oldString: input.old_string,
+            newString: input.new_string,
+            replacements: 0,
+            originalFile: "",
+            gitDiff: undefined,
+          },
+        };
+      }
+    } catch { /* statSync failure will be caught by readFileSync below */ }
+
     const originalContent = readFileSync(resolved, "utf-8");
 
     let newContent: string;

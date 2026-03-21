@@ -37,4 +37,4 @@ export interface ProviderAdapter {
   getTokenCountEndpoint?(): string;
 }
 
-export type ProviderName = "anthropic" | "bedrock" | "vertex" | "foundry" | "openai" | "ollama";
+export type ProviderName = "anthropic" | "bedrock" | "vertex" | "foundry" | "openai" | "ollama" | "xai" | "together" | "gemini";
