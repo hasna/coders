@@ -18,8 +18,11 @@ import { resolveApiKey } from "../auth/api-key.js";
 import { getSettings } from "../config/loader.js";
 import { getApiClient } from "../api/client.js";
 import type { Message as ApiMessage, ThinkingConfig } from "../api/client.js";
-import { isSlashCommand, executeSlashCommand, getAllSlashCommands } from "../core/slash-commands.js";
+import { isSlashCommand, executeSlashCommand, getAllSlashCommands, getTopCommands } from "../core/slash-commands.js";
+import { getTheme, getAvailableThemes, type Theme } from "./themes.js";
+import { MODEL_REGISTRY } from "../api/models.js";
 import { estimateCost } from "../api/streaming.js";
+import { dashboardEvents } from "../web/events.js";
 import { renderMarkdown } from "./components/markdown.js";
 import { runAgentLoop, type ToolHandler, type ToolResult } from "../core/agent-loop.js";
 import { createDefaultPermissionContext, checkToolPermission, type PermissionResult } from "../config/permissions.js";
@@ -42,7 +45,7 @@ import {
 } from "../core/session.js";
 import { buildSystemPrompt } from "../core/system-prompt.js";
 import { bashTool } from "../tools/builtin/bash.js";
-import { readTool } from "../tools/builtin/read.js";
+import { readTool, clearReadHistory } from "../tools/builtin/read.js";
 import { editTool } from "../tools/builtin/edit.js";
 import { writeTool } from "../tools/builtin/write.js";
 import { globTool } from "../tools/builtin/glob.js";
@@ -68,6 +71,10 @@ import { createTeam, getTeam, addTeamMember, updateMemberStatus } from "../core/
 import { classifyPrompt, filterToolsByClassification, type PromptClassification } from "../core/classifier.js";
 import { skillTool } from "../tools/builtin/skill.js";
 import { setDeferredToolSchemas } from "../tools/registry.js";
+
+// ── Message ID counter (avoids Date.now() collisions in same tick) ──
+let _msgSeq = 0;
+function msgId(prefix: string): string { return `${prefix}${Date.now()}-${_msgSeq++}`; }
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -663,28 +670,30 @@ function useCustomStatusLine(
     }
 
     const runCommand = () => {
-      try {
-        const stdinData = JSON.stringify({
-          model: context.model,
-          cost: context.cost,
-          tokens: context.tokens,
-          cwd: process.cwd(),
-          version: VERSION,
-        });
-        const result = execSync(config.command, {
-          timeout: 3000,
-          input: stdinData,
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-        const trimmed = result.trim();
+      const stdinData = JSON.stringify({
+        model: context.model,
+        cost: context.cost,
+        tokens: context.tokens,
+        cwd: process.cwd(),
+        version: VERSION,
+      });
+      const child = require("child_process").exec(config.command, {
+        timeout: 3000,
+        encoding: "utf-8",
+      });
+      child.stdin?.write(stdinData);
+      child.stdin?.end();
+      let stdout = "";
+      child.stdout?.on("data", (d: string) => { stdout += d; });
+      child.on("close", () => {
+        const trimmed = stdout.trim();
         if (trimmed) {
           setOutput(config.padding ? trimmed.padEnd(config.padding) : trimmed);
+        } else {
+          setOutput(null);
         }
-      } catch {
-        // Command failed — fall back to default status line
-        setOutput(null);
-      }
+      });
+      child.on("error", () => setOutput(null));
       lastRunRef.current = Date.now();
     };
 
@@ -700,21 +709,10 @@ function useCustomStatusLine(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-function _Header({ model, mode, agentName, teamName }: { model: string; mode: string; agentName?: string; teamName?: string }) {
-  return (
-    <Box marginBottom={1}>
-      <Text bold color="cyan">@hasna/coders</Text>
-      <Text dimColor> v{VERSION} · {model} · {mode}</Text>
-      {agentName && teamName && <Text dimColor> · </Text>}
-      {agentName && teamName && <Text color="yellow">{agentName}</Text>}
-      {teamName && <Text dimColor>@{teamName}</Text>}
-    </Box>
-  );
-}
 
-function ToolItem({ tool }: { tool: ToolDisplay }) {
+function ToolItem({ tool, verbose }: { tool: ToolDisplay; verbose?: boolean }) {
   const f = useSpinner(tool.status === "running");
-  const icon = tool.status === "running" ? f : "●";
+  const icon = tool.status === "running" ? f : tool.status === "error" ? "✗" : "●";
   const color = tool.status === "running" ? "cyan"
     : tool.status === "error" ? "red" : "cyan";
 
@@ -736,15 +734,87 @@ function ToolItem({ tool }: { tool: ToolDisplay }) {
       {resultLine && (
         <Box>
           <Text dimColor>  {CONN} </Text>
-          <Text dimColor>{resultLine.slice(0, 90)}</Text>
+          <Text dimColor>{verbose ? resultLine : resultLine.slice(0, 90)}</Text>
+        </Box>
+      )}
+      {verbose && tool.result && tool.result !== resultLine && (
+        <Box flexDirection="column">
+          {tool.result.split("\n").slice(0, 20).map((line, li) => (
+            <Box key={`vr-${li}`}><Text dimColor>  {CONN} {line}</Text></Box>
+          ))}
         </Box>
       )}
       {tool.error && (
         <Box>
           <Text dimColor>  {CONN} </Text>
-          <Text color="red">{tool.error.slice(0, 90)}</Text>
+          <Text color="red">{verbose ? tool.error : tool.error.slice(0, 90)}</Text>
         </Box>
       )}
+    </Box>
+  );
+}
+
+// ── Full-screen Dialog Component ──────────────────────────────────
+
+function FullScreenDialog({ title, hint, items, selectedIndex, cols, rows }: {
+  title: string;
+  hint?: string;
+  items: Array<{ label: string; detail?: string; current?: boolean }>;
+  selectedIndex: number;
+  cols: number;
+  rows: number;
+}) {
+  const dialogW = Math.min(cols - 4, 70);
+  const maxVisible = Math.min(rows - 8, items.length);
+  const pad = Math.max(0, Math.floor((cols - dialogW) / 2));
+  const topPad = Math.max(1, Math.floor((rows - maxVisible - 6) / 2));
+
+  // Window items around selection
+  let start = 0;
+  if (items.length > maxVisible) {
+    start = Math.max(0, Math.min(selectedIndex - Math.floor(maxVisible / 2), items.length - maxVisible));
+  }
+  const visible = items.slice(start, start + maxVisible);
+
+  const border = "─".repeat(dialogW - 2);
+  const sp = " ".repeat(pad);
+  const innerW = dialogW - 4;
+
+  return (
+    <Box flexDirection="column">
+      {/* Top padding */}
+      {Array.from({ length: topPad }, (_, i) => <Text key={`tp${i}`}>{" "}</Text>)}
+      {/* Top border */}
+      <Text>{sp}╭{border}╮</Text>
+      {/* Title row */}
+      <Text>{sp}│ <Text bold>{title.padEnd(innerW - (hint?.length ?? 0) - 2)}</Text>{hint ? <Text dimColor>{hint}</Text> : ""} │</Text>
+      {/* Separator */}
+      <Text>{sp}├{border}┤</Text>
+      {/* Scroll up indicator */}
+      {start > 0 && <Text dimColor>{sp}│ {"↑ " + start + " more".padEnd(innerW)} │</Text>}
+      {/* Items */}
+      {visible.map((item, vi) => {
+        const i = start + vi;
+        const sel = i === selectedIndex;
+        const mark = item.current ? " ·" : "  ";
+        const label = item.label.padEnd(Math.floor(innerW * 0.45));
+        const detail = (item.detail ?? "").slice(0, Math.floor(innerW * 0.5));
+        return (
+          <Box key={`di${i}`}>
+            <Text>{sp}│ </Text>
+            {sel ? (
+              <Text backgroundColor="blue" color="white"> {label}{detail}{mark} </Text>
+            ) : (
+              <Text> {label}<Text dimColor>{detail}</Text>{mark} </Text>
+            )}
+            <Text> │</Text>
+          </Box>
+        );
+      })}
+      {/* Scroll down indicator */}
+      {start + maxVisible < items.length && <Text dimColor>{sp}│ {"↓ " + (items.length - start - maxVisible) + " more".padEnd(innerW)} │</Text>}
+      {/* Bottom border */}
+      <Text>{sp}╰{border}╯</Text>
     </Box>
   );
 }
@@ -762,10 +832,20 @@ function formatToolResult(toolName: string, result: string): string[] {
     }
     case "Read":
       return [`Read ${totalLines} lines`];
-    case "Edit":
-      return [result.includes("Successfully") ? shortPath(result.split("\n")[0]).slice(0, 80) : `Edited (${totalLines} lines changed)`];
-    case "Write":
+    case "Edit": {
+      // Show file path and replacement count from the diff
+      const firstLine = result.split("\n")[0] ?? "";
+      const diffLines = result.split("\n").filter(l => l.startsWith("+") || l.startsWith("-")).length;
+      const filePath = firstLine.match(/([^\s]+\.\w+)/)?.[1] ?? "";
+      if (filePath) return [`…/${shortPath(filePath)} (${Math.ceil(diffLines / 2)} replacement${diffLines > 2 ? "s" : ""})`];
+      return [result.includes("Successfully") ? shortPath(firstLine).slice(0, 80) : `Edited (${totalLines} lines changed)`];
+    }
+    case "Write": {
+      const writePath = result.match(/([^\s]+\.\w+)/)?.[1] ?? "";
+      const bytes = result.match(/(\d+)\s*bytes/)?.[1];
+      if (writePath) return [`…/${shortPath(writePath)}${bytes ? ` (${bytes} bytes)` : ""}`];
       return [shortPath(result.split("\n").filter(l => l.trim()).join(" ")).slice(0, 80)];
+    }
     case "Glob":
       return [`Found ${result.split("\n").filter(l => l.trim()).length} files`];
     case "Grep":
@@ -787,8 +867,8 @@ function ThinkingBlock({ text }: { text: string }) {
         <Text dimColor color="magenta">{"  "}Thinking...</Text>
       </Box>
       {preview.map((line, i) => (
-        <Box key={i}>
-          <Text dimColor>{"  "}{CONN} {line.slice(0, 120)}</Text>
+        <Box key={`think-${i}-${line.slice(0, 20)}`}>
+          <Text dimColor>{"  "}{CONN} {line}</Text>
         </Box>
       ))}
       {hasMore && (
@@ -813,46 +893,54 @@ function MessageView({ msg }: { msg: ChatMessage }) {
     : null;
 
   return (
-    <Box flexDirection="column" marginTop={0}>
+    <Box flexDirection="column" marginTop={1}>
       {/* Thinking block — shown above response text, dimmed and collapsible */}
       {msg.thinking && <ThinkingBlock text={msg.thinking} />}
-      {/* Tool calls (shown as they happen) */}
-      {msg.tools?.map((t) => <ToolItem key={t.id} tool={t} />)}
+      {/* Tool calls — grouped consecutive same-type tools show count */}
+      {msg.tools && msg.tools.length > 1 && msg.tools.every(t => t.name === msg.tools![0].name) ? (
+        <ToolItem key={msg.tools[0].id} tool={{
+          ...msg.tools[0],
+          summary: `${msg.tools[0].summary ?? ""} (${msg.tools.length} calls)`,
+        }} />
+      ) : (
+        msg.tools?.map((t) => <ToolItem key={t.id} tool={t} />)
+      )}
       {/* Then the text response — ANSI-formatted via renderMarkdown */}
       {formattedContent && (
         <Box>
           <Text>{formattedContent}</Text>
         </Box>
       )}
-      {/* Duration — verb is fixed at creation, NOT random per render */}
-      {msg.durationMs != null && msg.durationMs > 1000 && msg.durationVerb && (
-        <Box marginTop={1}>
-          <Text dimColor>{msg.durationVerb} for {fmtDur(msg.durationMs)}</Text>
+      {/* Duration — only show on text responses (not tool-only), and only for longer responses */}
+      {msg.durationMs != null && msg.durationMs > 3000 && msg.durationVerb && msg.content && msg.content.length > 10 && (
+        <Box marginTop={0}>
+          <Text dimColor italic>{fmtDur(msg.durationMs)}</Text>
         </Box>
       )}
     </Box>
   );
 }
 
-function StatusBar({ model, mode, cost, tokens, agentName, teamName, classification, bgTaskCount, customStatusLine }: {
-  model: string; mode: string; cost: number; tokens: number;
+function StatusBar({ model, mode, effort, cost, tokens, tokensIn, tokensOut, agentName, teamName, classification, bgTaskCount, customStatusLine }: {
+  model: string; mode: string; effort: string; cost: number; tokens: number; tokensIn: number; tokensOut: number;
   agentName?: string; teamName?: string; classification?: PromptClassification | null;
   bgTaskCount?: number; customStatusLine?: string | null;
 }) {
-  // If a custom status line command produced output, use that instead
   if (customStatusLine) {
     return <Box><Text dimColor>{customStatusLine}</Text></Box>;
   }
 
-  const teamLabel = agentName && teamName ? ` \u00B7 ${agentName}@${teamName}` : "";
-  const intentLabel = classification && classification.intent !== "general" ? ` \u00B7 [${classification.intent}]` : "";
-  const bgLabel = bgTaskCount && bgTaskCount > 0 ? ` \u00B7 ${bgTaskCount} background task${bgTaskCount > 1 ? "s" : ""}` : "";
-  return <Box><Text dimColor>{model} \u00B7 {mode} \u00B7 ${cost.toFixed(4)} \u00B7 {fmtTok(tokens)}{teamLabel}{intentLabel}{bgLabel}</Text></Box>;
+  const effortLabel = effort !== "high" ? ` · effort:${effort}` : "";
+  const tokenLabel = tokens > 0 ? ` · ↓${fmtTok(tokensIn)} ↑${fmtTok(tokensOut)}` : ` · ${fmtTok(tokens)}`;
+  const teamLabel = agentName && teamName ? ` · ${agentName}@${teamName}` : "";
+  const intentLabel = classification && classification.intent !== "general" ? ` · [${classification.intent}]` : "";
+  const bgLabel = bgTaskCount && bgTaskCount > 0 ? ` · ${bgTaskCount} bg task${bgTaskCount > 1 ? "s" : ""}` : "";
+  return <Box><Text dimColor>{model} · {mode}{effortLabel} · ${cost.toFixed(4)}{tokenLabel}{teamLabel}{intentLabel}{bgLabel}</Text></Box>;
 }
 
 // ── Main App ───────────────────────────────────────────────────────
 
-function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSession, mcpToolHandlers, agentId, agentName, teamName }: {
+function App({ model: initialModel, mode: initialMode, dangerouslySkipPermissions, initialPrompt, resumedSession, mcpToolHandlers, agentId, agentName, teamName }: {
   model: string; mode: string; dangerouslySkipPermissions?: boolean; initialPrompt?: string;
   resumedSession?: { session: Session; history: ApiMessage[]; chatMessages: ChatMessage[] };
   mcpToolHandlers?: ToolHandler[];
@@ -860,6 +948,26 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
 }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
+  const [model, setModel] = useState(initialModel);
+  const [mode, setMode] = useState(initialMode);
+  const [theme, setTheme] = useState<Theme>(getTheme("default"));
+  const [effort, setEffort] = useState<"low" | "medium" | "high">("high");
+  const [verbose, setVerbose] = useState(false);
+  const [transcriptMode, setTranscriptMode] = useState(false);
+  const [vimMode, setVimMode] = useState(false);
+  // Interactive status line picker state
+  type PickerType = "model" | "mode" | "effort" | "theme" | null;
+  const [activePicker, setActivePicker] = useState<PickerType>(null);
+  const [pickerIndex, setPickerIndex] = useState(0);
+  // Config picker state
+  const [configPickerOpen, setConfigPickerOpen] = useState(false);
+  const [configPickerIdx, setConfigPickerIdx] = useState(0);
+  const [sessionsPickerOpen, setSessionsPickerOpen] = useState(false);
+  const [sessionsPickerIdx, setSessionsPickerIdx] = useState(0);
+  const [sessionsList, setSessionsList] = useState<Array<{ id: string; model: string; date: string; msgs: number; cost: number }>>([]);
+  const [historySearchMode, setHistorySearchMode] = useState(false);
+  const [historySearchQuery, setHistorySearchQuery] = useState("");
+  const prevModelRef = useRef(initialModel); // for /fast toggle
   const [msgs, setMsgs] = useState<ChatMessage[]>(resumedSession?.chatMessages ?? []);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -867,6 +975,8 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
   const [thinkingText, setThinkingText] = useState("");
   const [cost, setCost] = useState(0);
   const [tokens, setTokens] = useState(0);
+  const [tokensIn, setTokensIn] = useState(0);
+  const [tokensOut, setTokensOut] = useState(0);
   const [history, setHistory] = useState<ApiMessage[]>(resumedSession?.history ?? []);
   const [activeTools, setActiveTools] = useState<ToolDisplay[]>([]);
   const [sessionRef] = useState<{ current: Session }>(() => ({
@@ -874,10 +984,24 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
   }));
   const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
   const activeToolsRef = React.useRef<ToolDisplay[]>([]);
+  // Memoize tool handlers — only recreate if mcpToolHandlers change
+  const toolSplitRef = useRef<ReturnType<typeof createToolHandlers> | null>(null);
+  if (!toolSplitRef.current) {
+    toolSplitRef.current = createToolHandlers(mcpToolHandlers);
+    setDeferredToolSchemas([...toolSplitRef.current.deferredSchemas.values()]);
+  }
+  const streamingRef = useRef("");
+  const thinkingTextRef = useRef("");
+  const busyStartRef = useRef(0);
+  const [elapsed, setElapsed] = useState("");
   const abortRef = React.useRef<AbortController | null>(null);
-  // Keep ref in sync with state (so closures always get latest)
+  // Input history for Up/Down arrow navigation
+  const inputHistoryRef = useRef<string[]>([]);
+  const [historyIdx, setHistoryIdx] = useState(-1);
+  // Keep refs in sync with state (so closures always get latest)
   activeToolsRef.current = activeTools;
-  const _rows = stdout?.rows ?? 24;
+  streamingRef.current = streaming;
+  thinkingTextRef.current = thinkingText;
   const [slashSelected, setSlashSelected] = useState(0);
   const [lastClassification, setLastClassification] = useState<PromptClassification | null>(null);
   const [bgTasks, setBgTasks] = useState<BackgroundTask[]>([]);
@@ -888,6 +1012,21 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
   // ── Custom status line command ──
   const statusLineConfig = (appSettings as any).statusLine as { type: "command"; command: string; padding?: number } | undefined;
   const customStatusLine = useCustomStatusLine(statusLineConfig, { model, cost, tokens });
+
+  // ── Busy elapsed timer (updates every 1s while agent is working) ──
+  useEffect(() => {
+    if (busy) {
+      busyStartRef.current = Date.now();
+      const tick = setInterval(() => {
+        const ms = Date.now() - busyStartRef.current;
+        const m = Math.floor(ms / 60000);
+        const s = Math.floor((ms % 60000) / 1000);
+        setElapsed(m > 0 ? `${m}m ${s}s` : `${s}s`);
+      }, 1000);
+      return () => clearInterval(tick);
+    }
+    setElapsed("");
+  }, [busy]);
 
   // ── Background task polling (every 1s) ──
   useEffect(() => {
@@ -953,13 +1092,23 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
   const showSlashMenu = input.startsWith("/") && !busy;
   const slashFilter = input.slice(1).toLowerCase();
   const filteredCommands = showSlashMenu
-    ? allCommands.filter(c => c.name.toLowerCase().startsWith(slashFilter)).slice(0, 8)
+    ? slashFilter
+      ? allCommands.filter(c => c.name.toLowerCase().startsWith(slashFilter)).slice(0, 8)
+      : getTopCommands(5)
     : [];
 
   // ── Permission dialog state ──────────────────────────────
   const [permissionPending, setPermissionPending] = useState<{
     toolName: string; summary: string;
     resolve: (decision: "allow" | "deny" | "always") => void;
+  } | null>(null);
+
+  // ── AskUserQuestion dialog state ──────────────────────────
+  const [questionPending, setQuestionPending] = useState<{
+    questions: Array<{ question: string; header: string; options: Array<{ label: string; description: string }> }>;
+    selectedOptions: number[]; // one selected index per question
+    activeQuestion: number; // which question is being answered
+    resolve: (answers: Record<string, string>) => void;
   } | null>(null);
 
   // Permission request callback — creates a Promise that blocks until user responds
@@ -970,7 +1119,7 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
   }, []);
 
   // Tools the user has pressed "a" (always) for — auto-allow without prompting
-  const [alwaysAllowedTools] = useState<Set<string>>(() => new Set());
+  const alwaysAllowedTools = useRef(new Set<string>()).current;
 
   // Handle permission dialog key presses
   useInput((ch) => {
@@ -980,9 +1129,49 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
     else if (ch === "a" || ch === "A") { permissionPending.resolve("always"); setPermissionPending(null); }
   }, { isActive: !!permissionPending });
 
+  // Handle AskUserQuestion dialog key presses
+  useInput((ch, key) => {
+    if (!questionPending) return;
+    const q = questionPending;
+    const opts = q.questions[q.activeQuestion]?.options ?? [];
+
+    if (opts.length === 0) {
+      // Skip questions with no options
+      if (key.return || key.escape) { q.resolve({}); setQuestionPending(null); }
+      return;
+    }
+    if (key.upArrow) {
+      const sel = [...q.selectedOptions];
+      sel[q.activeQuestion] = (sel[q.activeQuestion] - 1 + opts.length) % opts.length;
+      setQuestionPending({ ...q, selectedOptions: sel });
+    } else if (key.downArrow) {
+      const sel = [...q.selectedOptions];
+      sel[q.activeQuestion] = (sel[q.activeQuestion] + 1) % opts.length;
+      setQuestionPending({ ...q, selectedOptions: sel });
+    } else if (key.return) {
+      // Confirm this question's answer
+      if (q.activeQuestion < q.questions.length - 1) {
+        setQuestionPending({ ...q, activeQuestion: q.activeQuestion + 1 });
+      } else {
+        const answers: Record<string, string> = {};
+        for (let i = 0; i < q.questions.length; i++) {
+          const opt = q.questions[i].options[q.selectedOptions[i]];
+          if (opt) answers[q.questions[i].question] = opt.label;
+        }
+        q.resolve(answers);
+        setQuestionPending(null);
+      }
+    } else if (key.escape) {
+      // Cancel — resolve with empty answers
+      q.resolve({});
+      setQuestionPending(null);
+    }
+  }, { isActive: !!questionPending });
+
   // Tool UI callbacks
   const onToolStart = useCallback((id: string, name: string, summary: string) => {
     setActiveTools((prev) => [...prev, { id, name, summary, status: "running" }]);
+    dashboardEvents.push("tool_start", { id, name, summary });
   }, []);
 
   const onToolEnd = useCallback((id: string, result: string, error?: string, durationMs?: number) => {
@@ -1003,6 +1192,7 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
       timestamp: Date.now(), tools: [completed],
     }]);
     setActiveTools(prev => prev.filter(t => t.id !== id));
+    dashboardEvents.push("tool_end", { id, name: tool.name, result: result.slice(0, 200), error, durationMs });
   }, []);
 
   const submit = useCallback(async (text: string) => {
@@ -1017,9 +1207,9 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
         const label = r.data as string | undefined;
         try {
           const cp = saveCheckpoint(sessionRef.current.id, history, label);
-          setMsgs((p) => [...p, { id: `s${Date.now()}`, role: "system", content: `Checkpoint saved: "${cp.label}" (${cp.messageCount} messages) id:${cp.id.slice(0, 8)}`, timestamp: Date.now() }]);
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: `Checkpoint saved: "${cp.label}" (${cp.messageCount} messages) id:${cp.id.slice(0, 8)}`, timestamp: Date.now() }]);
         } catch (e) {
-          setMsgs((p) => [...p, { id: `s${Date.now()}`, role: "system", content: `Failed to save checkpoint: ${e instanceof Error ? e.message : String(e)}`, timestamp: Date.now() }]);
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: `Failed to save checkpoint: ${e instanceof Error ? e.message : String(e)}`, timestamp: Date.now() }]);
         }
         return;
       }
@@ -1038,7 +1228,7 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
         }));
         setMsgs([
           ...restoredChatMsgs,
-          { id: `s${Date.now()}`, role: "system", content: r.output ?? `Restored checkpoint "${cp.label}"`, timestamp: Date.now() },
+          { id: msgId("s"), role: "system", content: r.output ?? `Restored checkpoint "${cp.label}"`, timestamp: Date.now() },
         ]);
         return;
       }
@@ -1046,11 +1236,13 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
       // Handle /compact — summarize conversation, then clear and keep summary
       if (r.action === "compact") {
         if (history.length === 0) {
-          setMsgs((p) => [...p, { id: `s${Date.now()}`, role: "system", content: "Nothing to compact — conversation is empty.", timestamp: Date.now() }]);
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: "Nothing to compact — conversation is empty.", timestamp: Date.now() }]);
           return;
         }
 
-        setMsgs((p) => [...p, { id: `s${Date.now()}`, role: "system", content: "Compacting conversation...", timestamp: Date.now() }]);
+        // Estimate tokens before compact
+        const beforeTokens = history.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length / 4 : 0), 0);
+        setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: `Compacting conversation (~${Math.round(beforeTokens).toLocaleString()} tokens)...`, timestamp: Date.now() }]);
 
         try {
           const client = getApiClient();
@@ -1076,26 +1268,122 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
 
           // Clear everything and start fresh with summary as context
           const summarySystemMsg: ChatMessage = {
-            id: `compact${Date.now()}`,
+            id: msgId("compact"),
             role: "system",
             content: `[Compacted conversation summary]\n${summaryText}`,
             timestamp: Date.now(),
           };
 
+          const afterTokens = summaryText.length / 4;
+          const saved = Math.round(beforeTokens - afterTokens);
+          summarySystemMsg.content += `\n\n[Compacted: ~${Math.round(beforeTokens).toLocaleString()} → ~${Math.round(afterTokens).toLocaleString()} tokens (saved ~${saved.toLocaleString()})]`;
           setMsgs([summarySystemMsg]);
           setHistory([
             { role: "user", content: "Here is a summary of our conversation so far:\n" + summaryText },
             { role: "assistant", content: "Understood. I have the context from our previous conversation. How can I help you continue?" },
           ]);
         } catch (e) {
-          setMsgs((p) => [...p, { id: `e${Date.now()}`, role: "system", content: `Failed to compact: ${e instanceof Error ? e.message : String(e)}`, timestamp: Date.now() }]);
+          setMsgs((p) => [...p, { id: msgId("e"), role: "system", content: `Failed to compact: ${e instanceof Error ? e.message : String(e)}`, timestamp: Date.now() }]);
         }
         return;
       }
 
-      if (r.output) setMsgs((p) => [...p, { id: `s${Date.now()}`, role: "system", content: r.output!, timestamp: Date.now() }]);
+      if (r.output) setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: r.output!, timestamp: Date.now() }]);
       if (r.action === "exit") exit();
-      if (r.action === "clear") { setMsgs([]); setHistory([]); }
+      if (r.action === "clear") {
+        setMsgs([]); setHistory([]); clearReadHistory();
+        // Force-clear terminal screen (Ink Static can't be un-rendered via React)
+        process.stdout.write("\x1b[2J\x1b[H");
+      }
+      if (r.action === "model") {
+        if (r.data) { setModel(r.data as string); }
+        else { setActivePicker("model"); setPickerIndex(0); }
+      }
+      if (r.action === "fast") {
+        if (model === "haiku" || model === "haiku45") {
+          setModel(prevModelRef.current);
+        } else {
+          prevModelRef.current = model;
+          setModel("haiku");
+        }
+      }
+      if (r.action === "theme") {
+        if (r.data) { setTheme(getTheme(r.data as string)); }
+        else { setActivePicker("theme"); setPickerIndex(0); }
+      }
+      if (r.action === "effort") {
+        if (r.data) {
+          setEffort(r.data as "low" | "medium" | "high");
+        } else {
+          setActivePicker("effort");
+          setPickerIndex(0);
+        }
+      }
+      if (r.action === "toggleView") {
+        setTranscriptMode((t) => {
+          const next = !t;
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: next ? "Transcript mode ON — showing full details." : "Transcript mode OFF — compact view.", timestamp: Date.now() }]);
+          return next;
+        });
+      }
+      if (r.action === "plan") {
+        if (r.data) {
+          setMode(r.data === "off" ? "default" : (r.data as typeof mode));
+        } else {
+          setActivePicker("mode");
+          setPickerIndex(0);
+        }
+      }
+      if (r.action === "verbose") {
+        setVerbose((v) => {
+          const next = !v;
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: next ? "Verbose mode ON — showing full tool details." : "Verbose mode OFF — compact output.", timestamp: Date.now() }]);
+          return next;
+        });
+      }
+      if (r.action === "vim") {
+        setVimMode((v) => {
+          const next = !v;
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: next ? "Vim mode ON — Escape for normal mode, i for insert." : "Vim mode OFF.", timestamp: Date.now() }]);
+          return next;
+        });
+      }
+      if (r.action === "sessionsPicker") {
+        try {
+          const sessions = dbAll<any>(
+            `SELECT s.id, s.model, s.created_at, COUNT(m.id) AS msg_count, COALESCE(SUM(m.cost_usd), 0) AS cost
+             FROM sessions s LEFT JOIN messages m ON m.session_id = s.id
+             GROUP BY s.id ORDER BY s.created_at DESC LIMIT 20`,
+          );
+          setSessionsList(sessions.map((s: any) => ({
+            id: s.id, model: s.model ?? "?", date: (s.created_at ?? "").slice(0, 16), msgs: s.msg_count ?? 0, cost: s.cost ?? 0,
+          })));
+          setSessionsPickerOpen(true);
+          setSessionsPickerIdx(0);
+        } catch { /* silent */ }
+      }
+      if (r.action === "configPicker") {
+        setConfigPickerOpen(true);
+        setConfigPickerIdx(0);
+      }
+      if (r.action === "export" && r.data) {
+        try {
+          const path = r.data as string;
+          const content = msgs.map(m => `## ${m.role} (${new Date(m.timestamp).toISOString()})\n\n${m.content}\n`).join("\n---\n\n");
+          require("fs").writeFileSync(path, content, "utf-8");
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: `Exported ${msgs.length} messages to: ${path}`, timestamp: Date.now() }]);
+        } catch (e) {
+          setMsgs((p) => [...p, { id: msgId("e"), role: "system", content: `Export failed: ${e instanceof Error ? e.message : String(e)}`, timestamp: Date.now() }]);
+        }
+      }
+      if (r.action === "rename" && r.data) {
+        try {
+          const name = r.data as string;
+          const { dbRun: dbR } = require("../db/index.js");
+          dbR("UPDATE sessions SET metadata = json_set(COALESCE(metadata, '{}'), '$.name', ?) WHERE id = ?", [name, sessionRef.current.id]);
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: `Session renamed to: ${name}`, timestamp: Date.now() }]);
+        } catch { /* silent */ }
+      }
       return;
     }
 
@@ -1103,16 +1391,21 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
     try {
       const hookResult = await executeHooks("UserPromptSubmit");
       if (hookResult.blocked) {
-        setMsgs((p) => [...p, { id: `h${Date.now()}`, role: "system", content: `Blocked by hook: ${hookResult.message ?? "UserPromptSubmit hook rejected the message"}`, timestamp: Date.now() }]);
+        setMsgs((p) => [...p, { id: msgId("h"), role: "system", content: `Blocked by hook: ${hookResult.message ?? "UserPromptSubmit hook rejected the message"}`, timestamp: Date.now() }]);
         return;
       }
     } catch { /* hook failure is non-blocking */ }
 
+    // Record in input history for Up/Down navigation
+    inputHistoryRef.current.push(text);
+    setHistoryIdx(-1);
+
     // Add user message
-    setMsgs((p) => [...p, { id: `u${Date.now()}`, role: "user", content: text, timestamp: Date.now() }]);
+    setMsgs((p) => [...p, { id: msgId("u"), role: "user", content: text, timestamp: Date.now() }]);
     const newHistory: ApiMessage[] = [...history, { role: "user", content: text }];
     setHistory(newHistory);
     setBusy(true);
+    dashboardEvents.push("busy", { prompt: text.slice(0, 200) });
     setStreaming("");
     setThinkingText("");
     setActiveTools([]);
@@ -1123,12 +1416,9 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
     const t0 = performance.now();
 
     try {
-      const toolSplit = createToolHandlers(mcpToolHandlers);
+      const toolSplit = toolSplitRef.current!;
       const permCtx = createDefaultPermissionContext(getSettings());
       const toolStartTimes = new Map<string, number>();
-
-      // Store deferred tool schemas in registry so ToolSearch can access them
-      setDeferredToolSchemas([...toolSplit.deferredSchemas.values()]);
 
       // ── Classify prompt to filter tools by intent ──
       const classification = classifyPrompt(text);
@@ -1175,12 +1465,13 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
             permissionMode: mode,
             tools: toolPrompts,
             deferredTools: toolSplit.deferredInfo,
+            effort,
           }),
           tools: toolHandlers,
           model,
           thinkingConfig,
           permissionContext: permCtx,
-          maxTurns: 10,
+          maxTurns: 100,
           agentId,
           onPermissionCheck: async (toolName: string, toolInput: Record<string, unknown>): Promise<PermissionResult> => {
             // Fire PreToolUse hook — if blocked, reject the tool use
@@ -1190,6 +1481,38 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
                 return { behavior: "deny", message: preHook.message ?? `Blocked by PreToolUse hook for ${toolName}` };
               }
             } catch { /* hook failure is non-blocking */ }
+
+            // AskUserQuestion ALWAYS needs user interaction — even in bypass mode
+            if (toolName === "AskUserQuestion" && toolInput.questions) {
+              const questions = toolInput.questions as Array<{ question: string; header: string; options: Array<{ label: string; description: string }> }>;
+              const answers = await new Promise<Record<string, string>>((resolve) => {
+                setQuestionPending({
+                  questions,
+                  selectedOptions: questions.map(() => 0),
+                  activeQuestion: 0,
+                  resolve,
+                });
+              });
+              // Inject answers into the tool input so call() returns them
+              (toolInput as any).answers = answers;
+              return { behavior: "allow" };
+            }
+
+            // ExitPlanMode ALWAYS needs user approval — show permission dialog
+            if (toolName === "ExitPlanMode") {
+              const decision = await requestPermission("ExitPlanMode", "Exit plan mode and start coding?");
+              if (decision === "deny") return { behavior: "deny", message: "User declined to exit plan mode." };
+              return { behavior: "allow" };
+            }
+
+            // Plan mode: only allow read-only tools
+            if (mode === "plan") {
+              const handler = toolHandlers.find(t => t.name === toolName);
+              if (handler && !handler.isReadOnly) {
+                return { behavior: "deny", message: `Plan mode: ${toolName} is not read-only. Use /plan off to exit plan mode.` };
+              }
+              return { behavior: "allow" };
+            }
 
             // Bypass permissions mode or --dangerously-skip-permissions: allow everything
             if (dangerouslySkipPermissions || permCtx.mode === "bypassPermissions") {
@@ -1224,11 +1547,8 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
             return { behavior: decision === "allow" ? "allow" : "deny" };
           },
           onTextDelta: (text) => {
-            // Only show streaming when no tools are running
-            // (completed tools are removed from activeTools, so length===0 means all done)
-            if (activeToolsRef.current.length === 0) {
-              setStreaming((prev) => prev + text);
-            }
+            // Always accumulate — never drop text deltas
+            setStreaming((prev) => prev + text);
           },
           onThinkingDelta: (thinking) => {
             if (thinkingEnabled) {
@@ -1245,7 +1565,7 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
             const isErr = toolResult.isError || !!toolResult.error;
             const startTime = toolStartTimes.get(id);
             const dur = startTime ? performance.now() - startTime : undefined;
-            onToolEnd(id, String(toolResult.data ?? "").slice(0, 500), isErr ? toolResult.error : undefined, dur);
+            onToolEnd(id, String(toolResult.data ?? "").slice(0, 2000), isErr ? toolResult.error : undefined, dur);
             // Fire PostToolUse hook (fire-and-forget — post-hooks don't block)
             executeHooks("PostToolUse", { toolName: name }).catch(() => {});
           },
@@ -1272,10 +1592,10 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
         }
       }
 
-      // If we were streaming and got the same text, use streaming version
-      if (!finalText && streaming) finalText = streaming;
+      // If we were streaming and got the same text, use streaming version (read from ref to avoid stale closure)
+      if (!finalText && streamingRef.current) finalText = streamingRef.current;
       // Use accumulated thinking text if API didn't return thinking blocks
-      if (!finalThinking && thinkingText) finalThinking = thinkingText;
+      if (!finalThinking && thinkingTextRef.current) finalThinking = thinkingTextRef.current;
 
       const c = estimateCost(
         { inputTokens: result.usage.totalInputTokens, outputTokens: result.usage.totalOutputTokens },
@@ -1283,10 +1603,12 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
       );
       setCost((p) => p + c.totalCostUsd);
       setTokens((p) => p + result.usage.totalInputTokens + result.usage.totalOutputTokens);
+      setTokensIn((p) => p + result.usage.totalInputTokens);
+      setTokensOut((p) => p + result.usage.totalOutputTokens);
 
       // Persist assistant response to DB
       try {
-        const assistantText = finalText || streaming || "";
+        const assistantText = finalText || streamingRef.current || "";
         addMessage(sessionRef.current.id, "assistant", assistantText, {
           tokensIn: result.usage.totalInputTokens,
           tokensOut: result.usage.totalOutputTokens,
@@ -1299,11 +1621,11 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
       // Tools were already committed to Static individually via onToolEnd.
       // Only add the text response here (no tools — prevents duplication).
       const verb = VERBS[Math.floor(Math.random() * VERBS.length)];
-      const textContent = finalText || streaming || "";
+      const textContent = finalText || streamingRef.current || "";
 
       if (textContent && textContent !== "(no response)") {
         setMsgs((p) => [...p, {
-          id: `a${Date.now()}`, role: "assistant",
+          id: msgId("a"), role: "assistant",
           content: textContent,
           thinking: finalThinking || undefined,
           timestamp: Date.now(),
@@ -1313,7 +1635,7 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
       } else if (dur > 1000) {
         // No text but show duration for tool-only responses
         setMsgs((p) => [...p, {
-          id: `a${Date.now()}`, role: "assistant",
+          id: msgId("a"), role: "assistant",
           content: "",
           thinking: finalThinking || undefined,
           timestamp: Date.now(),
@@ -1323,38 +1645,115 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
       }
 
       // Update conversation history for next turn
-      setHistory(result.messages.filter((m) => m.role === "user" || m.role === "assistant"));
+      const newHist = result.messages.filter((m) => m.role === "user" || m.role === "assistant");
+      setHistory(newHist);
+
+      // Auto-compact: if token usage exceeds 80% of context window, compact automatically
+      const totalTokensUsed = result.usage.totalInputTokens + result.usage.totalOutputTokens;
+      const contextLimit = 200_000; // default context window
+      if (totalTokensUsed > contextLimit * 0.8 && newHist.length > 4) {
+        setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: "Context nearly full — auto-compacting...", timestamp: Date.now() }]);
+        try {
+          const summaryPrompt = "Summarize our conversation so far in 2-3 paragraphs, focusing on: what was accomplished, key decisions made, and any pending work.";
+          const summaryResult = await getApiClient().createMessage({
+            model,
+            messages: [...newHist, { role: "user", content: summaryPrompt }],
+            maxTokens: 2048,
+          });
+          const summaryText = summaryResult.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n");
+          if (summaryText) {
+            setHistory([
+              { role: "user", content: "Here is a summary of our conversation so far:\n" + summaryText },
+              { role: "assistant", content: "Understood. I have the context. How can I help?" },
+            ]);
+            setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: "Auto-compacted conversation to stay within context limits.", timestamp: Date.now() }]);
+          }
+        } catch { /* auto-compact failure is non-blocking */ }
+      }
+
       setStreaming("");
       setThinkingText("");
       setActiveTools([]);
     } catch (err) {
       const e = err instanceof Error ? err.message : String(err);
-      setMsgs((p) => [...p, { id: `e${Date.now()}`, role: "system", content: `Error: ${e}`, timestamp: Date.now() }]);
+      setMsgs((p) => [...p, { id: msgId("e"), role: "system", content: `Error: ${e}`, timestamp: Date.now() }]);
     } finally {
       abortRef.current = null;
       setBusy(false);
+      dashboardEvents.push("idle", { model });
     }
-  }, [busy, history, model, exit, onToolStart, onToolEnd, streaming, thinkingText, activeTools]);
+  }, [busy, history, model, exit, onToolStart, onToolEnd]);
 
   // ── Process queued messages after agent finishes ──
   useEffect(() => {
     if (!busy && queuedMessages.length > 0) {
       const next = queuedMessages[0];
       setQueuedMessages((q) => q.slice(1));
-      // Small delay to let the UI settle before next submission
-      setTimeout(() => submit(next), 100);
+      const timer = setTimeout(() => submit(next), 100);
+      return () => clearTimeout(timer);
     }
   }, [busy, queuedMessages]);
 
   useEffect(() => { if (initialPrompt) submit(initialPrompt); }, []); // eslint-disable-line
 
   useInput((ch, key) => {
-    // Permission dialog has its own handler
-    if (permissionPending) return;
+    // Permission and question dialogs have their own handlers
+    if (permissionPending || questionPending) return;
+
+    // ── Sessions picker navigation ──
+    if (sessionsPickerOpen) {
+      const total = sessionsList.length;
+      if (total === 0) { setSessionsPickerOpen(false); return; }
+      if (key.downArrow) { setSessionsPickerIdx((i) => (i + 1) % total); return; }
+      if (key.upArrow) { setSessionsPickerIdx((i) => (i - 1 + total) % total); return; }
+      if (key.return) {
+        const selected = sessionsList[sessionsPickerIdx];
+        if (selected) {
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: `To resume session ${selected.id.slice(0, 8)}, restart with:\n  coders --resume ${selected.id.slice(0, 8)}`, timestamp: Date.now() }]);
+        }
+        setSessionsPickerOpen(false); setSessionsPickerIdx(0);
+        return;
+      }
+      if (key.escape) { setSessionsPickerOpen(false); setSessionsPickerIdx(0); return; }
+      return;
+    }
+
+    // ── Config picker navigation ──
+    if (configPickerOpen) {
+      const settings = getSettings();
+      const entries = Object.entries(settings).filter(([, v]) => v !== undefined && v !== null);
+      if (entries.length === 0) { setConfigPickerOpen(false); return; }
+      if (key.downArrow) { setConfigPickerIdx((i) => (i + 1) % entries.length); return; }
+      if (key.upArrow) { setConfigPickerIdx((i) => (i - 1 + entries.length) % entries.length); return; }
+      if (key.return) {
+        const [k, v] = entries[configPickerIdx];
+        if (typeof v === "boolean") {
+          // Toggle boolean
+          const { saveUserSettings } = require("../config/loader.js");
+          saveUserSettings({ [k]: !v });
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: `${k} = ${!v}`, timestamp: Date.now() }]);
+        } else {
+          // For non-booleans, show current value and hint to use /config key value
+          setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: `${k} = ${typeof v === "object" ? JSON.stringify(v) : String(v)}\nUse: /config ${k} <value> to change`, timestamp: Date.now() }]);
+        }
+        setConfigPickerOpen(false); setConfigPickerIdx(0);
+        return;
+      }
+      if (key.escape) { setConfigPickerOpen(false); setConfigPickerIdx(0); return; }
+      return;
+    }
 
     // ── While busy: typing + queue (Enter) + interrupt (Ctrl+Enter) ──
     if (busy) {
-      if (key.ctrl && ch === "c") { setBusy(false); setStreaming(""); abortRef.current?.abort(); return; }
+      if (key.ctrl && ch === "c") {
+        setBusy(false); setStreaming(""); abortRef.current?.abort();
+        // Remove the cancelled user message from API history so next prompt starts clean
+        setHistory((h) => {
+          const last = h[h.length - 1];
+          return last?.role === "user" ? h.slice(0, -1) : h;
+        });
+        return;
+      }
       // Ctrl+Enter: INTERRUPT — abort current turn and send message immediately
       if (key.ctrl && key.return && input.trim()) {
         const msg = input.trim();
@@ -1364,7 +1763,33 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
         setQueuedMessages((q) => [msg, ...q]);
         return;
       }
-      // Enter: QUEUE — send after current turn finishes
+      // Enter: slash commands execute immediately even while busy
+      if (key.return && input.trim() && isSlashCommand(input.trim())) {
+        const cmd = input.trim();
+        setInput("");
+        // Execute slash command without queuing
+        executeSlashCommand(cmd).then((r) => {
+          if (r.output) setMsgs((p) => [...p, { id: msgId("s"), role: "system", content: r.output!, timestamp: Date.now() }]);
+          // Handle picker actions
+          if (r.action === "model") { if (r.data) setModel(r.data as string); else { setActivePicker("model"); setPickerIndex(0); } }
+          if (r.action === "effort") { if (r.data) setEffort(r.data as "low" | "medium" | "high"); else { setActivePicker("effort"); setPickerIndex(0); } }
+          if (r.action === "theme") { if (r.data) setTheme(getTheme(r.data as string)); else { setActivePicker("theme"); setPickerIndex(0); } }
+          if (r.action === "plan") { if (r.data) setMode(r.data === "off" ? "default" : "plan"); else { setActivePicker("mode"); setPickerIndex(0); } }
+          if (r.action === "configPicker") { setConfigPickerOpen(true); setConfigPickerIdx(0); }
+          if (r.action === "sessionsPicker") {
+            try {
+              const sessions = dbAll<any>(
+                `SELECT s.id, s.model, s.created_at, COUNT(m.id) AS msg_count, COALESCE(SUM(m.cost_usd), 0) AS cost
+                 FROM sessions s LEFT JOIN messages m ON m.session_id = s.id GROUP BY s.id ORDER BY s.created_at DESC LIMIT 20`,
+              );
+              setSessionsList(sessions.map((s: any) => ({ id: s.id, model: s.model ?? "?", date: (s.created_at ?? "").slice(0, 16), msgs: s.msg_count ?? 0, cost: s.cost ?? 0 })));
+              setSessionsPickerOpen(true); setSessionsPickerIdx(0);
+            } catch {}
+          }
+        });
+        return;
+      }
+      // Enter: QUEUE regular messages — send after current turn finishes
       if (key.return && input.trim()) {
         setQueuedMessages((q) => [...q, input.trim()]);
         setInput("");
@@ -1372,19 +1797,75 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
       }
       // Allow typing, backspace, escape even while busy
       if (key.backspace || key.delete) { setInput((p) => p.slice(0, -1)); return; }
-      if (key.escape) { setInput(""); return; }
+      if (key.escape) {
+        if (input) { setInput(""); } // First Escape clears input
+        else { setBusy(false); setStreaming(""); abortRef.current?.abort(); } // Second Escape aborts agent
+        return;
+      }
       if (!key.ctrl && !key.meta && ch) { setInput((p) => p + ch); return; }
+      return;
+    }
+
+    // ── Reverse history search (Ctrl+R) ──
+    if (historySearchMode) {
+      if (key.escape) { setHistorySearchMode(false); setHistorySearchQuery(""); return; }
+      if (key.return) {
+        // Accept the match
+        const hist = inputHistoryRef.current;
+        const match = [...hist].reverse().find(h => h.toLowerCase().includes(historySearchQuery.toLowerCase()));
+        if (match) setInput(match);
+        setHistorySearchMode(false); setHistorySearchQuery("");
+        return;
+      }
+      if (key.backspace || key.delete) { setHistorySearchQuery(q => q.slice(0, -1)); return; }
+      if (ch && !key.ctrl && !key.meta) { setHistorySearchQuery(q => q + ch); return; }
+      return;
+    }
+
+    // ── Status line picker navigation ──
+    if (activePicker) {
+      const pickerOptions: Record<string, string[]> = {
+        model: Object.keys(MODEL_REGISTRY),
+        mode: ["default", "plan", "bypassPermissions"],
+        effort: ["low", "medium", "high"],
+        theme: getAvailableThemes(),
+      };
+      const opts = pickerOptions[activePicker] ?? [];
+      if (opts.length === 0) {
+        if (key.escape || key.return) { setActivePicker(null); setPickerIndex(0); }
+        return;
+      }
+      if (key.downArrow) { setPickerIndex((i) => (i + 1) % opts.length); return; }
+      if (key.upArrow) { setPickerIndex((i) => (i - 1 + opts.length) % opts.length); return; }
+      if (key.return) {
+        const val = opts[pickerIndex];
+        if (activePicker === "model") setModel(val);
+        else if (activePicker === "mode") setMode(val);
+        else if (activePicker === "effort") setEffort(val as "low" | "medium" | "high");
+        else if (activePicker === "theme") setTheme(getTheme(val));
+        setActivePicker(null); setPickerIndex(0);
+        return;
+      }
+      if (key.escape) { setActivePicker(null); setPickerIndex(0); return; }
+      // Tab cycles picker type
+      if (key.tab) {
+        const types: PickerType[] = ["model", "mode", "effort", "theme"];
+        const idx = types.indexOf(activePicker);
+        setActivePicker(types[(idx + 1) % types.length]);
+        setPickerIndex(0);
+        return;
+      }
       return;
     }
 
     // ── Slash autocomplete navigation ──
     if (showSlashMenu && filteredCommands.length > 0) {
       if (key.downArrow || (key.tab && !key.shift)) {
-        setSlashSelected((s) => Math.min(s + 1, filteredCommands.length - 1));
+        setSlashSelected((s) => (s + 1) % filteredCommands.length);
         return;
       }
       if (key.upArrow || (key.tab && key.shift)) {
-        setSlashSelected((s) => Math.max(s - 1, 0));
+        setSlashSelected((s) => (s - 1 + filteredCommands.length) % filteredCommands.length);
         return;
       }
       if (key.return) {
@@ -1395,11 +1876,45 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
     }
 
     // ── Normal input ──
-    if (key.return) { const t = input; setInput(""); setSlashSelected(0); submit(t); }
+    if (key.return) {
+      // Backslash continuation: if input ends with \, add newline instead of submitting
+      if (input.endsWith("\\")) {
+        setInput((p) => p.slice(0, -1) + "\n");
+      } else {
+        const t = input; setInput(""); setSlashSelected(0); submit(t);
+      }
+    }
     else if (key.backspace || key.delete) { setInput((p) => p.slice(0, -1)); setSlashSelected(0); }
+    else if (key.upArrow && !input.startsWith("/")) {
+      // Navigate input history (Up = older)
+      const hist = inputHistoryRef.current;
+      if (hist.length > 0) {
+        const newIdx = historyIdx < 0 ? hist.length - 1 : Math.max(0, historyIdx - 1);
+        setHistoryIdx(newIdx);
+        setInput(hist[newIdx] ?? "");
+      }
+    }
+    else if (key.downArrow && !input.startsWith("/")) {
+      // Navigate input history (Down = newer)
+      const hist = inputHistoryRef.current;
+      if (historyIdx >= 0) {
+        const newIdx = historyIdx + 1;
+        if (newIdx >= hist.length) { setHistoryIdx(-1); setInput(""); }
+        else { setHistoryIdx(newIdx); setInput(hist[newIdx] ?? ""); }
+      }
+    }
     else if (key.ctrl && ch === "c") exit();
     else if (key.ctrl && ch === "d") exit();
-    else if (key.ctrl && ch === "l") { setMsgs([]); setHistory([]); }
+    else if (key.ctrl && ch === "l") { setMsgs([]); process.stdout.write("\x1b[2J\x1b[H"); }
+    else if (key.ctrl && ch === "z" && !busy) { submit("/undo"); }
+    else if (key.ctrl && ch === "r" && !busy) { setHistorySearchMode(true); setHistorySearchQuery(""); }
+    else if (ch === "\x1c") { // Ctrl+\ = toggle verbose
+      setVerbose(v => {
+        setMsgs(p => [...p, { id: msgId("s"), role: "system", content: !v ? "Verbose ON" : "Verbose OFF", timestamp: Date.now() }]);
+        return !v;
+      });
+    }
+    else if (key.ctrl && ch === "s" && !input.trim()) { setActivePicker("model"); setPickerIndex(0); }
     else if (key.escape) setInput("");
     else if (!key.ctrl && !key.meta && ch) setInput((p) => p + ch);
   });
@@ -1408,11 +1923,32 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
   const pad = 2; // left+right padding
   const sep = "─".repeat(Math.min(cols - pad, 120));
   const hasRunningTools = activeTools.some(t => t.status === "running");
+  const termRows = stdout?.rows ?? 24;
+
 
   return (
     <>
       {/* ══ STATIC ZONE: completed messages scroll naturally in terminal ══ */}
-      <Static items={msgs}>
+      {/* Group consecutive tool-only messages of the same type/file */}
+      <Static items={(() => {
+        const grouped: ChatMessage[] = [];
+        for (const msg of msgs) {
+          const prev = grouped[grouped.length - 1];
+          // Group if: both are tool-only (no text content), same tool name, same file
+          if (
+            prev?.tools?.length === 1 && msg.tools?.length === 1 &&
+            !prev.content && !msg.content &&
+            prev.tools[0].name === msg.tools[0].name &&
+            prev.tools[0].summary === msg.tools[0].summary
+          ) {
+            // Merge into previous — add tool to the tools array
+            prev.tools.push(msg.tools[0]);
+          } else {
+            grouped.push({ ...msg, tools: msg.tools ? [...msg.tools] : undefined });
+          }
+        }
+        return grouped;
+      })()}>
         {(msg) => (
           <Box key={msg.id} flexDirection="column" paddingLeft={1} paddingRight={1}>
             <MessageView msg={msg} />
@@ -1426,7 +1962,7 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
         {/* ALL active tools shown sequentially while agent is working */}
         {busy && activeTools.length > 0 && (
           <Box flexDirection="column">
-            {activeTools.map((t) => <ToolItem key={t.id} tool={t} />)}
+            {activeTools.map((t) => <ToolItem key={t.id} tool={t} verbose={verbose} />)}
           </Box>
         )}
 
@@ -1438,8 +1974,8 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
               <Text dimColor color="magenta"> Thinking...</Text>
             </Box>
             {thinkingText.split("\n").filter(l => l.trim()).slice(-3).map((line, i) => (
-              <Box key={i}>
-                <Text dimColor>  {CONN} {line.slice(0, 120)}</Text>
+              <Box key={`live-think-${i}-${line.slice(0, 20)}`}>
+                <Text dimColor>  {CONN} {line}</Text>
               </Box>
             ))}
           </Box>
@@ -1448,7 +1984,7 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
         {/* Streaming text — show only last 3 lines */}
         {busy && streaming && (
           <Box>
-            <Text>{streaming.split("\n").filter(l => l.trim()).slice(-3).join("\n").slice(-200)}</Text>
+            <Text>{streaming.split("\n").filter(l => l.trim()).slice(-5).join("\n")}</Text>
           </Box>
         )}
 
@@ -1456,7 +1992,7 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
         {busy && !streaming && !thinkingText && activeTools.length === 0 && (
           <Box>
             <SpinnerDot />
-            <Text dimColor> Thinking...</Text>
+            <Text dimColor> Thinking...{elapsed ? ` (${elapsed}${tokens > 0 ? ` · ↓ ${fmtTok(tokens)}` : ""})` : ""}</Text>
           </Box>
         )}
 
@@ -1464,7 +2000,7 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
         {busy && hasRunningTools && (
           <Box>
             <SpinnerDot />
-            <Text dimColor> Working...</Text>
+            <Text dimColor> Working...{elapsed ? ` (${elapsed}${tokens > 0 ? ` · ↓ ${fmtTok(tokens)}` : ""})` : ""}</Text>
           </Box>
         )}
 
@@ -1489,6 +2025,36 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
           </Box>
         )}
 
+        {/* AskUserQuestion dialog — shows questions with options */}
+        {questionPending && (
+          <Box flexDirection="column" marginTop={1}>
+            <Box>
+              <Text color="magenta" bold>? </Text>
+              <Text bold>Question {questionPending.activeQuestion + 1}/{questionPending.questions.length}</Text>
+              <Text dimColor> (↑↓ select · Enter confirm · Esc skip)</Text>
+            </Box>
+            {(() => {
+              const q = questionPending.questions[questionPending.activeQuestion];
+              const selIdx = questionPending.selectedOptions[questionPending.activeQuestion];
+              return (
+                <Box flexDirection="column" paddingLeft={2} marginTop={0}>
+                  <Text color="cyan" bold>{q.header}: </Text>
+                  <Text>{q.question}</Text>
+                  {q.options.map((opt, i) => (
+                    <Box key={opt.label}>
+                      <Text color={i === selIdx ? "cyan" : undefined} bold={i === selIdx}>
+                        {i === selIdx ? "▸ " : "  "}
+                      </Text>
+                      <Text color={i === selIdx ? "cyan" : undefined}>{opt.label}</Text>
+                      <Text dimColor> — {opt.description}</Text>
+                    </Box>
+                  ))}
+                </Box>
+              );
+            })()}
+          </Box>
+        )}
+
         {/* ── Background task list (shown above input when tasks are active) ── */}
         {bgTasks.length > 0 && (
           <BackgroundTaskList tasks={bgTasks} />
@@ -1498,8 +2064,8 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
         <Box flexDirection="column">
           <Text dimColor>{sep}</Text>
         <Box>
-          <Text color="cyan" bold>{PROMPT} </Text>
-          {input.startsWith("/") ? <Text color="magenta">{input}</Text> : <Text>{input}</Text>}
+          <Text color={theme.colors.primary} bold>{PROMPT} </Text>
+          {input.startsWith("/") ? <Text color={theme.colors.plan}>{input}</Text> : <Text>{input}</Text>}
           <Text color="gray">▎</Text>
         </Box>
         {busy && input.trim() && (
@@ -1514,23 +2080,216 @@ function App({ model, mode, dangerouslySkipPermissions, initialPrompt, resumedSe
           </Box>
         )}
 
-        {/* Slash command autocomplete dropdown */}
-        {showSlashMenu && filteredCommands.length > 0 && (
-          <Box flexDirection="column" paddingLeft={2}>
-            {filteredCommands.map((cmd, i) => (
-              <Box key={cmd.name}>
-                <Text color={i === slashSelected ? "cyan" : undefined} bold={i === slashSelected}>
-                  {i === slashSelected ? "▸ " : "  "}
-                </Text>
-                <Text color={i === slashSelected ? "cyan" : "blue"}>/{cmd.name.padEnd(16)}</Text>
-                <Text dimColor> {cmd.description}</Text>
-              </Box>
-            ))}
+        {/* Reverse history search */}
+        {historySearchMode && (
+          <Box paddingLeft={2}>
+            <Text color="yellow">search: </Text>
+            <Text>{historySearchQuery}</Text>
+            <Text color="gray">▎</Text>
+            {(() => {
+              const match = [...inputHistoryRef.current].reverse().find(h => h.toLowerCase().includes(historySearchQuery.toLowerCase()));
+              return match ? <Text dimColor> → {match.slice(0, 60)}</Text> : <Text dimColor> (no match)</Text>;
+            })()}
           </Box>
         )}
 
+        {/* Slash command autocomplete dropdown */}
+        {showSlashMenu && filteredCommands.length > 0 && (() => {
+          const MAX_VISIBLE = 8;
+          const total = filteredCommands.length;
+          let start = 0;
+          if (total > MAX_VISIBLE) {
+            start = Math.max(0, Math.min(slashSelected - Math.floor(MAX_VISIBLE / 2), total - MAX_VISIBLE));
+          }
+          const visible = filteredCommands.slice(start, start + MAX_VISIBLE);
+          return (
+            <Box flexDirection="column" paddingLeft={2}>
+              {start > 0 && <Text dimColor>  ↑ {start} more</Text>}
+              {visible.map((cmd, vi) => {
+                const i = start + vi;
+                return (
+                  <Box key={cmd.name}>
+                    <Text color={i === slashSelected ? "cyan" : undefined} bold={i === slashSelected}>
+                      {i === slashSelected ? "▸ " : "  "}
+                    </Text>
+                    <Text color={i === slashSelected ? "cyan" : "blue"}>/{cmd.name.padEnd(16)}</Text>
+                    <Text dimColor> {cmd.description}</Text>
+                  </Box>
+                );
+              })}
+              {start + MAX_VISIBLE < total && <Text dimColor>  ↓ {total - start - MAX_VISIBLE} more</Text>}
+            </Box>
+          );
+        })()}
+
+        {/* Sessions picker */}
+        {sessionsPickerOpen && sessionsList.length > 0 && (() => {
+          const maxVis = Math.min(termRows - 8, 15);
+          let start = 0;
+          if (sessionsList.length > maxVis) start = Math.max(0, Math.min(sessionsPickerIdx - Math.floor(maxVis / 2), sessionsList.length - maxVis));
+          const visible = sessionsList.slice(start, start + maxVis);
+          const currentId = sessionRef.current?.id;
+          return (
+            <Box flexDirection="column" paddingLeft={1}>
+              <Box justifyContent="space-between" width={w}>
+                <Text bold>Sessions</Text>
+                <Text dimColor>esc</Text>
+              </Box>
+              <Text>{" "}</Text>
+              <Box paddingLeft={2}><Text dimColor>{"Date".padEnd(18)}{"Model".padEnd(10)}{"Msgs".padEnd(6)}{"Cost".padEnd(8)}ID</Text></Box>
+              {start > 0 && <Box paddingLeft={2}><Text dimColor>↑ {start} more</Text></Box>}
+              {visible.map((s, vi) => {
+                const i = start + vi;
+                const sel = i === sessionsPickerIdx;
+                const cur = s.id === currentId;
+                const row = `${s.date.padEnd(18)}${s.model.padEnd(10)}${String(s.msgs).padEnd(6)}$${s.cost.toFixed(2).padEnd(7)} ${s.id.slice(0, 8)}`;
+                return (
+                  <Box key={s.id}>
+                    <Text color={sel ? "blue" : undefined}>{sel ? "▸ " : "  "}</Text>
+                    <Text bold={sel} color={sel ? "blue" : undefined}>{row}</Text>
+                    {cur && <Text color="green"> ← current</Text>}
+                  </Box>
+                );
+              })}
+              {start + maxVis < sessionsList.length && <Box paddingLeft={2}><Text dimColor>↓ {sessionsList.length - start - maxVis} more</Text></Box>}
+              <Box marginTop={1}><Text dimColor>Enter select | ↑↓ navigate | Esc close</Text></Box>
+            </Box>
+          );
+        })()}
+
+        {/* Inline picker — opencode style: grouped, blue highlight bar, disappears on select */}
+        {(activePicker || configPickerOpen) && (() => {
+          const w = Math.min(cols - 4, 70);
+
+          if (activePicker) {
+            const pickerOpts: Record<string, string[]> = {
+              model: Object.keys(MODEL_REGISTRY),
+              mode: ["default", "plan", "bypassPermissions"],
+              effort: ["low", "medium", "high"],
+              theme: getAvailableThemes(),
+            };
+            const opts = pickerOpts[activePicker] ?? [];
+            const currentVal = activePicker === "model" ? model : activePicker === "mode" ? mode : activePicker === "effort" ? effort : theme.name;
+
+            // Flatten all items with group headers for windowed display
+            type Row = { type: "header"; text: string } | { type: "item"; key: string; label: string; detail: string; reasoning: string; globalIdx: number; current: boolean };
+            const rows: Row[] = [];
+
+            if (activePicker === "model") {
+              const providerMap: Record<string, string> = {};
+              opts.forEach((opt) => {
+                const family = opt.replace(/\d+$/, "");
+                providerMap[opt] = family.includes("grok") ? "xAI" : family.includes("gemini") ? "Google" : family.includes("gpt") || family.includes("o3") || family.includes("o4") ? "OpenAI" : "Anthropic";
+              });
+              let lastProvider = "";
+              opts.forEach((opt, gi) => {
+                const provider = providerMap[opt];
+                if (provider !== lastProvider) { rows.push({ type: "header", text: provider }); lastProvider = provider; }
+                const e = MODEL_REGISTRY[opt];
+                const family = opt.replace(/\d+$/, "");
+                const ver = opt.replace(/^[a-z]+/, "").replace(/(\d)(\d)$/, "$1.$2");
+                const label = `${family.charAt(0).toUpperCase()}${family.slice(1)} ${ver}`;
+                const detail = e ? `${e.contextWindow / 1000}K` : "";
+                const reasoning = e?.supportsThinking ? "yes" : "no";
+                rows.push({ type: "item", key: opt, label, detail, reasoning, globalIdx: gi, current: opt === currentVal });
+              });
+            } else {
+              const descs: Record<string, Record<string, string>> = {
+                mode: { default: "Ask before writes", plan: "Read-only", bypassPermissions: "Allow all" },
+                effort: { low: "Shortest", medium: "Concise", high: "Full detail" },
+                theme: { default: "Standard", dark: "One Dark", light: "Light" },
+              };
+              rows.push({ type: "header", text: activePicker.charAt(0).toUpperCase() + activePicker.slice(1) });
+              opts.forEach((o, i) => rows.push({ type: "item", key: o, label: o, detail: descs[activePicker]?.[o] ?? "", reasoning: "", globalIdx: i, current: o === currentVal }));
+            }
+
+            // Window: max items that fit in terminal
+            const maxVis = Math.min(termRows - 10, 18);
+            // Find the row index of the selected item
+            const selRowIdx = rows.findIndex(r => r.type === "item" && r.globalIdx === pickerIndex);
+            let startRow = 0;
+            if (rows.length > maxVis) {
+              startRow = Math.max(0, Math.min(selRowIdx - Math.floor(maxVis / 2), rows.length - maxVis));
+            }
+            const visibleRows = rows.slice(startRow, startRow + maxVis);
+
+            return (
+              <Box flexDirection="column" paddingLeft={1}>
+                <Box justifyContent="space-between" width={w}>
+                  <Text bold>Select {activePicker}</Text>
+                  <Text dimColor>esc</Text>
+                </Box>
+                <Text>{" "}</Text>
+                {/* Column header */}
+                {activePicker === "model" && (
+                  <Box paddingLeft={2}>
+                    <Text dimColor>{"Model".padEnd(24)}{"Ctx".padStart(6)}{"Reasoning".padStart(12)}</Text>
+                  </Box>
+                )}
+                {startRow > 0 && <Box paddingLeft={2}><Text dimColor>↑ {startRow} more</Text></Box>}
+                {visibleRows.map((row, ri) => {
+                  if (row.type === "header") {
+                    return <Box key={`h${ri}`} paddingLeft={1}><Text bold color="cyan"> {row.text}</Text></Box>;
+                  }
+                  const sel = row.globalIdx === pickerIndex;
+                  const prefix = sel ? "▸ " : "  ";
+                  const labelCol = row.label.padEnd(24);
+                  const detailCol = row.detail.padStart(6);
+                  const reasonCol = activePicker === "model" ? row.reasoning.padStart(12) : ("  " + row.detail);
+                  return (
+                    <Box key={row.key}>
+                      <Text color={sel ? "blue" : undefined}>{prefix}</Text>
+                      <Text bold={sel} color={sel ? "blue" : undefined}>{labelCol}</Text>
+                      <Text dimColor={!sel} color={sel ? "blue" : undefined}>{detailCol}{reasonCol}</Text>
+                      {row.current && <Text color="green"> ← current</Text>}
+                    </Box>
+                  );
+                })}
+                {startRow + maxVis < rows.length && <Box paddingLeft={2}><Text dimColor>↓ {rows.length - startRow - maxVis} more</Text></Box>}
+                {/* Footer hints */}
+                <Box marginTop={1}><Text dimColor>Enter select | ↑↓ navigate | Tab next picker | Esc close</Text></Box>
+              </Box>
+            );
+          }
+
+          if (configPickerOpen) {
+            const settings = getSettings();
+            const entries = Object.entries(settings).filter(([, v]) => v !== undefined && v !== null);
+            const maxVis = 12;
+            let start = 0;
+            if (entries.length > maxVis) start = Math.max(0, Math.min(configPickerIdx - Math.floor(maxVis / 2), entries.length - maxVis));
+            const visible = entries.slice(start, start + maxVis);
+            return (
+              <Box flexDirection="column" paddingLeft={1}>
+                <Box justifyContent="space-between" width={w}>
+                  <Text bold>Settings</Text>
+                  <Text dimColor>esc</Text>
+                </Box>
+                <Text>{" "}</Text>
+                {start > 0 && <Text dimColor>  {start} more above</Text>}
+                {visible.map(([k, v], vi) => {
+                  const i = start + vi;
+                  const sel = i === configPickerIdx;
+                  let val = typeof v === "boolean" ? (v ? "on" : "off") : typeof v === "object" ? JSON.stringify(v).slice(0, 25) : String(v).slice(0, 25);
+                  return (
+                    <Box key={k} width={w}>
+                      {sel ? (
+                        <Text backgroundColor="blue" color="white" bold>  {k.padEnd(28)}{val}</Text>
+                      ) : (
+                        <Text>  {k.padEnd(28)}<Text dimColor>{val}</Text></Text>
+                      )}
+                    </Box>
+                  );
+                })}
+                {start + maxVis < entries.length && <Text dimColor>  {entries.length - start - maxVis} more below</Text>}
+              </Box>
+            );
+          }
+          return null;
+        })()}
+
         <Text dimColor>{sep}</Text>
-        <StatusBar model={model} mode={mode} cost={cost} tokens={tokens} agentName={agentName ?? agentId} teamName={teamName} classification={lastClassification} bgTaskCount={bgTasks.filter(t => t.status === "running").length} customStatusLine={customStatusLine} />
+        <StatusBar model={model} mode={mode} effort={effort} cost={cost} tokens={tokens} tokensIn={tokensIn} tokensOut={tokensOut} agentName={agentName ?? agentId} teamName={teamName} classification={lastClassification} bgTaskCount={bgTasks.filter(t => t.status === "running").length} customStatusLine={customStatusLine} />
         </Box>
       </Box>
     </>
@@ -1616,9 +2375,23 @@ export function launchInkApp(opts: {
 
   // Wait for MCP init before rendering so tools are available from the first turn
   mcpReady.then((mcpToolHandlers) => {
-    // Suppress console.warn/error — they corrupt the Ink UI
-    console.warn = () => {};
-    console.error = () => {};
+    // Redirect console.warn/error to a log file instead of suppressing
+    // (they corrupt the Ink UI if printed to stdout)
+    const _origWarn = console.warn;
+    const _origError = console.error;
+    const logBuffer: string[] = [];
+    console.warn = (...args: unknown[]) => { logBuffer.push(`[warn] ${args.join(" ")}`); };
+    console.error = (...args: unknown[]) => { logBuffer.push(`[error] ${args.join(" ")}`); };
+    // Flush log on exit
+    process.on("beforeExit", () => {
+      if (logBuffer.length > 0) {
+        try {
+          const { appendFileSync } = require("fs");
+          const { join } = require("path");
+          appendFileSync(join(require("os").homedir(), ".coders", "debug.log"), logBuffer.join("\n") + "\n");
+        } catch { /* best effort */ }
+      }
+    });
 
     const { waitUntilExit } = render(
       <App model={model} mode={mode} dangerouslySkipPermissions={opts.dangerouslySkipPermissions} initialPrompt={opts.initialPrompt} resumedSession={resumedSession} mcpToolHandlers={mcpToolHandlers.length > 0 ? mcpToolHandlers : undefined} agentId={opts.agentId} agentName={opts.agentName} teamName={opts.teamName} />,

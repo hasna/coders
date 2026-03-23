@@ -1069,6 +1069,32 @@ export async function main(): Promise<void> {
       console.log("No agents configured");
     });
 
+  // ── Subcommand: dashboard ─────────────────────────────────────────
+
+  program.command("dashboard")
+    .description("Launch the web dashboard for managing open-coders")
+    .option("-p, --port <port>", "Port to listen on", "7077")
+    .action(async (opts) => {
+      const { startDashboard } = await import("../web/server.js");
+      startDashboard(parseInt(opts.port, 10));
+    });
+
+  // ── Subcommand: exec ────────────────────────────────────────────
+
+  program.command("exec")
+    .description("Run a prompt headlessly (non-interactive, streams to stdout)")
+    .argument("<prompt...>", "The prompt to execute")
+    .option("--model <model>", "Model to use", "sonnet")
+    .option("--json", "Output as JSON")
+    .action(async (promptArgs: string[], opts) => {
+      const { runHeadless } = await import("../ui/app.js");
+      await runHeadless({
+        model: opts.model ?? "sonnet",
+        prompt: promptArgs.join(" "),
+        outputFormat: opts.json ? "json" : "text",
+      });
+    });
+
   // ── Parse ────────────────────────────────────────────────────────
 
   profileCheckpoint("run_before_parse");

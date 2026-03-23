@@ -228,9 +228,8 @@ function renderTable(token: Tokens.Table, maxWidth: number): string[] {
 /** Pad an ANSI-rendered string based on its visible (plain) length */
 function padRendered(rendered: string, plain: string, width: number): string {
   if (plain.length >= width) {
-    // Need to truncate — use plain text to find cut point
-    const truncPlain = plain.slice(0, width - 1) + "…";
-    return renderInline(truncPlain);
+    // Truncate plain text — don't re-render through inline formatting to avoid ANSI corruption
+    return plain.slice(0, width - 1) + "…";
   }
   return rendered + " ".repeat(width - plain.length);
 }
@@ -253,9 +252,9 @@ function renderInlineWithRestore(text: string, restore: string): string {
     // Bold — close with BOLD_OFF, then re-apply parent style
     .replace(/\*\*(.+?)\*\*/g, `${BOLD}$1${BOLD_OFF}${restore}`)
     .replace(/__(.+?)__/g, `${BOLD}$1${BOLD_OFF}${restore}`)
-    // Italic
+    // Italic — require word boundary to avoid matching snake_case_identifiers
     .replace(/\*(.+?)\*/g, `${ITALIC}$1${ITALIC_OFF}${restore}`)
-    .replace(/_(.+?)_/g, `${ITALIC}$1${ITALIC_OFF}${restore}`)
+    .replace(/(?<!\w)_([^_\s][^_]*?)_(?!\w)/g, `${ITALIC}$1${ITALIC_OFF}${restore}`)
     // Strikethrough
     .replace(/~~(.+?)~~/g, `${STRIKETHROUGH}$1${STRIKE_OFF}${restore}`)
     // Inline code — needs fg + bg close, then restore parent
@@ -282,36 +281,46 @@ function highlightSyntax(line: string, lang: string): string {
   };
 
   const ts = keywords.typescript ?? [];
-  const kw = keywords[lang] ?? keywords[lang.replace(/x$/, "")] ?? ts;
+  const kw = new Set(keywords[lang] ?? keywords[lang.replace(/x$/, "")] ?? ts);
 
-  let result = line;
+  // Tokenize first to avoid double-highlighting. Each token gets one color.
+  // Priority: comments > strings > keywords > numbers > plain
+  const tokens: Array<{ text: string; color: string }> = [];
+  let remaining = line;
 
-  // Comments
-  result = result.replace(/(\/\/.*$)/gm, `${FG_GRAY}$1${FG_DEFAULT}`);
-  result = result.replace(/(#.*$)/gm, `${FG_GRAY}$1${FG_DEFAULT}`);
-
-  // Strings
-  result = result.replace(/("[^"]*")/g, `${FG_GREEN}$1${FG_DEFAULT}`);
-  result = result.replace(/('[^']*')/g, `${FG_GREEN}$1${FG_DEFAULT}`);
-  result = result.replace(/(`[^`]*`)/g, `${FG_GREEN}$1${FG_DEFAULT}`);
-
-  // Keywords (word boundary)
-  for (const kwd of kw) {
-    result = result.replace(
-      new RegExp(`\\b(${kwd})\\b`, "g"),
-      `${FG_MAGENTA}$1${FG_DEFAULT}`,
-    );
+  // Extract comment (everything after // or #)
+  const commentMatch = remaining.match(/^(.*?)(\/\/.*|#.*)$/);
+  let commentPart = "";
+  if (commentMatch) {
+    remaining = commentMatch[1];
+    commentPart = commentMatch[2];
   }
 
-  // Numbers
-  result = result.replace(/\b(\d+\.?\d*)\b/g, `${FG_YELLOW}$1${FG_DEFAULT}`);
+  // Tokenize remaining by strings, keywords, numbers
+  const tokenRegex = /("[^"]*"|'[^']*'|`[^`]*`|\b\d+\.?\d*\b|\b\w+\b)/g;
+  let lastIdx = 0;
+  let match;
+  while ((match = tokenRegex.exec(remaining)) !== null) {
+    if (match.index > lastIdx) tokens.push({ text: remaining.slice(lastIdx, match.index), color: "" });
+    const t = match[1];
+    if (t.startsWith('"') || t.startsWith("'") || t.startsWith("`")) {
+      tokens.push({ text: t, color: FG_GREEN });
+    } else if (kw.has(t)) {
+      tokens.push({ text: t, color: FG_MAGENTA });
+    } else if (/^\d/.test(t)) {
+      tokens.push({ text: t, color: FG_YELLOW });
+    } else {
+      tokens.push({ text: t, color: "" });
+    }
+    lastIdx = match.index + match[0].length;
+  }
+  if (lastIdx < remaining.length) tokens.push({ text: remaining.slice(lastIdx), color: "" });
+  if (commentPart) tokens.push({ text: commentPart, color: FG_GRAY });
+
+  let result = tokens.map(t => t.color ? `${t.color}${t.text}${FG_DEFAULT}` : t.text).join("");
 
   return result;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function pad(text: string, width: number): string {
-  if (text.length >= width) return text.slice(0, width);
-  return text + " ".repeat(width - text.length);
-}
