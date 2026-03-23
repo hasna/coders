@@ -138,7 +138,8 @@ function parseSSEEvent(raw: string): StreamEvent | null {
     if (line.startsWith("event:")) {
       eventType = line.slice(6).trim();
     } else if (line.startsWith("data:")) {
-      const lineData = line.slice(5).trim();
+      // SSE spec: strip at most ONE leading space after "data:"
+      const lineData = line.charAt(5) === " " ? line.slice(6) : line.slice(5);
       data += (data ? "\n" : "") + lineData;
     }
     // Ignore id:, retry:, and comment lines (:)
@@ -153,7 +154,10 @@ function parseSSEEvent(raw: string): StreamEvent | null {
     }
     return parsed;
   } catch {
-    // Non-JSON data (e.g., "data: [DONE]")
+    // Skip known non-JSON markers, warn on unexpected parse failures
+    if (data.trim() !== "[DONE]" && data.trim() !== "") {
+      console.warn(`[streaming] Failed to parse SSE data: ${data.slice(0, 100)}`);
+    }
     return null;
   }
 }
@@ -169,6 +173,8 @@ export interface AccumulatedMessage {
   usage: {
     inputTokens: number;
     outputTokens: number;
+    cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
   };
 }
 
@@ -185,10 +191,10 @@ export async function* accumulateStream(
 }> {
   const accumulated: Partial<AccumulatedMessage> & { content: ContentBlock[] } = {
     content: [],
-    usage: { inputTokens: 0, outputTokens: 0 },
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
   };
   let currentBlockIndex = -1;
-  let currentJsonAccumulator = "";
+  const jsonAccumulators = new Map<number, string>();
 
   for await (const event of events) {
     switch (event.type) {
@@ -199,8 +205,11 @@ export async function* accumulateStream(
           accumulated.role = event.message.role;
           accumulated.stopReason = event.message.stop_reason;
           if (event.message.usage) {
-            accumulated.usage!.inputTokens = event.message.usage.input_tokens;
-            accumulated.usage!.outputTokens = event.message.usage.output_tokens;
+            const u = event.message.usage;
+            accumulated.usage!.inputTokens = u.input_tokens;
+            accumulated.usage!.outputTokens = u.output_tokens;
+            accumulated.usage!.cacheReadInputTokens = u.cache_read_input_tokens ?? 0;
+            accumulated.usage!.cacheCreationInputTokens = u.cache_creation_input_tokens ?? 0;
           }
         }
         break;
@@ -209,7 +218,7 @@ export async function* accumulateStream(
       case "content_block_start": {
         if (event.content_block && event.index !== undefined) {
           currentBlockIndex = event.index;
-          currentJsonAccumulator = "";
+          jsonAccumulators.set(event.index, "");
           accumulated.content.push({ ...event.content_block });
         }
         break;
@@ -233,7 +242,7 @@ export async function* accumulateStream(
               break;
             case "input_json_delta":
               if (block.type === "tool_use") {
-                currentJsonAccumulator += event.delta.partial_json;
+                jsonAccumulators.set(event.index, (jsonAccumulators.get(event.index) ?? "") + event.delta.partial_json);
                 // Don't eagerly parse during deltas — wait for content_block_stop
                 // to do the final parse. Intermediate parsing can set block.input to
                 // partial/incorrect values that get used if execution races ahead.
@@ -248,9 +257,10 @@ export async function* accumulateStream(
         // Finalize the block — this is where tool_use input JSON must be fully parsed
         if (event.index !== undefined) {
           const block = accumulated.content[event.index];
-          if (block?.type === "tool_use" && currentJsonAccumulator) {
+          const blockJson = jsonAccumulators.get(event.index) ?? "";
+          if (block?.type === "tool_use" && blockJson) {
             try {
-              block.input = JSON.parse(currentJsonAccumulator);
+              block.input = JSON.parse(blockJson);
               block._inputParseFailed = false;
             } catch {
               // JSON was not fully received or is malformed.
@@ -259,10 +269,10 @@ export async function* accumulateStream(
               // Instead, flag the failure and keep the raw string for diagnostics.
               block.input = {};
               block._inputParseFailed = true;
-              block._rawInputJson = currentJsonAccumulator;
+              block._rawInputJson = blockJson;
             }
           }
-          currentJsonAccumulator = "";
+          jsonAccumulators.delete(event.index);
         }
         break;
       }
@@ -322,7 +332,11 @@ export function estimateCost(usage: TokenUsage, model: string): CostEstimate {
   const inputRate = COST_PER_1M_INPUT[tier] ?? 3.0;
   const outputRate = COST_PER_1M_OUTPUT[tier] ?? 15.0;
 
-  const inputCostUsd = (usage.inputTokens / 1_000_000) * inputRate;
+  // Cache read tokens are 90% cheaper, cache write tokens are 25% more expensive
+  const regularInputTokens = usage.inputTokens - (usage.cacheReadTokens ?? 0) - (usage.cacheWriteTokens ?? 0);
+  const cacheReadCost = ((usage.cacheReadTokens ?? 0) / 1_000_000) * inputRate * 0.1;
+  const cacheWriteCost = ((usage.cacheWriteTokens ?? 0) / 1_000_000) * inputRate * 1.25;
+  const inputCostUsd = (Math.max(0, regularInputTokens) / 1_000_000) * inputRate + cacheReadCost + cacheWriteCost;
   const outputCostUsd = (usage.outputTokens / 1_000_000) * outputRate;
 
   return {

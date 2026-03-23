@@ -103,7 +103,7 @@ export const SettingsSchema = z.object({
   // Thinking
   thinking: z.object({
     enabled: z.boolean(),
-    budgetTokens: z.number().optional(),
+    budgetTokens: z.number().int().min(1).max(128000).optional(),
   }).optional(),
 
   // Features

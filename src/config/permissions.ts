@@ -131,7 +131,9 @@ function matchesRule(
   if (rule.command && toolName === "Bash") {
     const command = input.command as string | undefined;
     if (!command) return false;
-    if (!command.includes(rule.command)) return false;
+    // Match command as a word boundary — prevents "rm" matching "firmware"
+    const escapedCmd = rule.command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (!new RegExp(`(^|\\s|/|;|&&|\\|\\|)${escapedCmd}(\\s|$)`).test(command)) return false;
   }
 
   // Match by path (for file tools)
@@ -151,7 +153,9 @@ function matchesPathPattern(filePath: string, pattern: string): boolean {
     return filePath.startsWith(prefix);
   }
   if (pattern.includes("*")) {
-    const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$");
+    // Escape regex metacharacters except *, then convert * to .*
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    const regex = new RegExp("^" + escaped + "$");
     return regex.test(filePath);
   }
   return filePath === pattern || filePath.startsWith(pattern + "/");

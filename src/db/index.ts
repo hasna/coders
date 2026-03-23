@@ -340,9 +340,20 @@ function createJsonFileDb(): any {
     }
   } catch { /* corrupt file — start fresh */ }
 
+  let _flushTimer: ReturnType<typeof setTimeout> | null = null;
   function flush(): void {
-    try { writeFileSync(storePath, JSON.stringify(store), "utf-8"); } catch { /* silent */ }
+    // Debounce: batch rapid writes into a single disk flush (100ms)
+    if (_flushTimer) return;
+    _flushTimer = setTimeout(() => {
+      _flushTimer = null;
+      try { writeFileSync(storePath, JSON.stringify(store), "utf-8"); } catch { /* silent */ }
+    }, 100);
   }
+  // Ensure final flush on exit
+  process.once("beforeExit", () => {
+    if (_flushTimer) { clearTimeout(_flushTimer); _flushTimer = null; }
+    try { writeFileSync(storePath, JSON.stringify(store), "utf-8"); } catch { /* silent */ }
+  });
 
   function ensureTable(name: string): void {
     if (!store.tables[name]) {

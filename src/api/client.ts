@@ -19,6 +19,7 @@ import {
   type StreamEvent,
   type AccumulatedMessage,
   type ContentBlock,
+  estimateCost,
 } from "./streaming.js";
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -28,6 +29,8 @@ export interface MessageRequest {
   messages: Message[];
   systemPrompt?: string | SystemBlock[];
   tools?: ToolDefinition[];
+  /** Server-side tools (e.g. web_search_20250305) — appended to tools array */
+  serverTools?: Array<Record<string, unknown>>;
   toolChoice?: ToolChoice;
   maxTokens?: number;
   thinkingConfig?: ThinkingConfig;
@@ -169,8 +172,9 @@ export class ApiClient {
         : request.systemPrompt;
     }
 
-    if (request.tools && request.tools.length > 0) {
-      body.tools = request.tools;
+    const allTools: unknown[] = [...(request.tools ?? []), ...(request.serverTools ?? [])];
+    if (allTools.length > 0) {
+      body.tools = allTools;
     }
 
     if (request.toolChoice) {
@@ -341,11 +345,14 @@ export class ApiClient {
   private trackUsage(
     usage: { input_tokens: number; output_tokens: number },
     durationMs: number,
+    model?: string,
   ): void {
     this.totalInputTokens += usage.input_tokens;
     this.totalOutputTokens += usage.output_tokens;
     this.totalApiDurationMs += durationMs;
     this.requestCount++;
+    const cost = estimateCost({ inputTokens: usage.input_tokens, outputTokens: usage.output_tokens }, model ?? "sonnet");
+    this.totalCostUsd += cost.totalCostUsd;
   }
 
   getUsageStats(): {
@@ -380,7 +387,13 @@ export class ApiError extends Error {
     } catch {
       message = body;
     }
-    super(`API error ${status}: ${message}`);
+    const hints: Record<number, string> = {
+      401: " — Check your API key: run `coders auth status` or set ANTHROPIC_API_KEY",
+      403: " — Your API key doesn't have access to this model or feature",
+      429: " — Rate limited. Wait a moment and try again",
+      529: " — Anthropic API is overloaded. Try again in a few seconds",
+    };
+    super(`API error ${status}: ${message}${hints[status] ?? ""}`);
     this.name = "ApiError";
     this.status = status;
     this.body = body;

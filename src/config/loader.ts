@@ -10,9 +10,8 @@
  * Config file (.config.json) stores auth state, device ID, etc.
  * Settings file (settings.json) stores user preferences, hooks, permissions.
  */
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from "fs";
 import { dirname } from "path";
-import { mkdirSync } from "fs";
 import { SettingsSchema, DEFAULT_SETTINGS, type Settings } from "./settings.js";
 import {
   getUserSettingsPath,
@@ -20,13 +19,30 @@ import {
   getProjectSettingsPath,
 } from "./paths.js";
 
-// ── LRU-cached config/settings ─────────────────────────────────────
+// ── LRU-cached config/settings with mtime invalidation ──────────────
 
 let _userSettings: Settings | null = null;
 let _projectSettings: Settings | null = null;
 let _mergedSettings: Settings | null = null;
 let _projectRoot: string | null = null;
 let _config: Record<string, unknown> | null = null;
+let _userSettingsMtime = 0;
+let _projectSettingsMtime = 0;
+
+function getFileMtime(path: string): number {
+  try { return existsSync(path) ? statSync(path).mtimeMs : 0; } catch { return 0; }
+}
+
+function isUserSettingsStale(): boolean {
+  const path = getUserSettingsPath();
+  return getFileMtime(path) !== _userSettingsMtime;
+}
+
+function isProjectSettingsStale(): boolean {
+  if (!_projectRoot) return false;
+  const path = getProjectSettingsPath(_projectRoot);
+  return getFileMtime(path) !== _projectSettingsMtime;
+}
 
 // ── Public API ─────────────────────────────────────────────────────
 
@@ -35,6 +51,12 @@ let _config: Record<string, unknown> | null = null;
  * Call setProjectRoot() before first access to include project settings.
  */
 export function getSettings(): Settings {
+  // Invalidate cache if files changed on disk
+  if (_mergedSettings && (isUserSettingsStale() || isProjectSettingsStale())) {
+    _userSettings = null;
+    _projectSettings = null;
+    _mergedSettings = null;
+  }
   if (_mergedSettings) return _mergedSettings;
   _mergedSettings = mergeSettings();
   return _mergedSettings;
@@ -45,7 +67,9 @@ export function getSettings(): Settings {
  */
 export function getUserSettings(): Settings {
   if (_userSettings) return _userSettings;
-  _userSettings = loadSettingsFile(getUserSettingsPath());
+  const path = getUserSettingsPath();
+  _userSettings = loadSettingsFile(path);
+  _userSettingsMtime = getFileMtime(path);
   return _userSettings;
 }
 
@@ -55,7 +79,9 @@ export function getUserSettings(): Settings {
 export function getProjectSettings(): Settings {
   if (!_projectRoot) return {};
   if (_projectSettings) return _projectSettings;
-  _projectSettings = loadSettingsFile(getProjectSettingsPath(_projectRoot));
+  const path = getProjectSettingsPath(_projectRoot);
+  _projectSettings = loadSettingsFile(path);
+  _projectSettingsMtime = getFileMtime(path);
   return _projectSettings;
 }
 
@@ -155,9 +181,10 @@ function loadSettingsFile(path: string): Settings {
   const result = SettingsSchema.safeParse(raw);
   if (result.success) return result.data;
 
-  // If validation fails, return raw with a warning
+  // If validation fails, try partial parse — keep valid fields, drop invalid ones
   console.warn(`[config] Warning: settings at ${path} has validation errors:`, result.error.issues.map(i => i.message).join(", "));
-  return raw as Settings;
+  const partial = SettingsSchema.partial().safeParse(raw);
+  return partial.success ? partial.data as Settings : {};
 }
 
 function loadJsonFile(path: string): Record<string, unknown> | null {
@@ -172,8 +199,8 @@ function loadJsonFile(path: string): Record<string, unknown> | null {
 
 function writeJsonFile(path: string, data: unknown): void {
   const dir = dirname(path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(data, null, 2) + "\n", "utf-8");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify(data, null, 2) + "\n", { encoding: "utf-8", mode: 0o600 });
 }
 
 function deepMerge(target: unknown, source: unknown): unknown {
@@ -181,7 +208,11 @@ function deepMerge(target: unknown, source: unknown): unknown {
   if (target === undefined || target === null) return source;
 
   if (typeof target !== "object" || typeof source !== "object") return source;
-  if (Array.isArray(target) || Array.isArray(source)) return source;
+  if (Array.isArray(target) && Array.isArray(source)) {
+    // Concatenate arrays and deduplicate (preserves user + project entries)
+    return [...new Set([...target, ...source])];
+  }
+  if (Array.isArray(source)) return source;
 
   const result: Record<string, unknown> = { ...(target as Record<string, unknown>) };
   for (const [key, value] of Object.entries(source as Record<string, unknown>)) {

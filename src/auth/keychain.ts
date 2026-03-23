@@ -5,7 +5,7 @@
  * Linux: secret-tool (libsecret)
  * Windows: not yet supported
  */
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 import { platform } from "os";
 
 const SERVICE_NAME = "hasna-coders";
@@ -98,17 +98,11 @@ function setMacOSKeychainKey(apiKey: string): boolean {
   try {
     // Delete existing entry first (ignore errors)
     try {
-      execSync(
-        `security delete-generic-password -s "${SERVICE_NAME}" -a "${ACCOUNT_NAME}" 2>/dev/null`,
-        { stdio: "pipe" }
-      );
+      execFileSync("security", ["delete-generic-password", "-s", SERVICE_NAME, "-a", ACCOUNT_NAME], { stdio: "pipe" });
     } catch {
-      // ignore
+      // ignore — entry may not exist
     }
-    execSync(
-      `security add-generic-password -s "${SERVICE_NAME}" -a "${ACCOUNT_NAME}" -w "${apiKey}"`,
-      { stdio: "pipe" }
-    );
+    execFileSync("security", ["add-generic-password", "-s", SERVICE_NAME, "-a", ACCOUNT_NAME, "-w", apiKey], { stdio: "pipe" });
     return true;
   } catch {
     return false;
@@ -132,10 +126,10 @@ function getLinuxKeychainKey(): string | null {
 
 function setLinuxKeychainKey(apiKey: string): boolean {
   try {
-    execSync(
-      `echo -n "${apiKey}" | secret-tool store --label="Coders API Key" service "${SERVICE_NAME}" account "${ACCOUNT_NAME}"`,
-      { stdio: "pipe" }
-    );
+    execFileSync("secret-tool", ["store", "--label=Coders API Key", "service", SERVICE_NAME, "account", ACCOUNT_NAME], {
+      stdio: ["pipe", "pipe", "pipe"],
+      input: apiKey,
+    });
     return true;
   } catch {
     return false;

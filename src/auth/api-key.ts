@@ -57,10 +57,15 @@ export function resolveApiKey(): ResolvedApiKey | null {
     return { apiKey: primaryKey, source: "config:primaryApiKey", isOAuth: false };
   }
 
-  // 5. Config: Claude.ai OAuth tokens
-  const codersOauth = config.codersOauth as { accessToken?: string } | undefined;
+  // 5. Config: Claude.ai OAuth tokens (check expiry)
+  const codersOauth = config.codersOauth as { accessToken?: string; expiresAt?: number } | undefined;
   if (codersOauth?.accessToken) {
-    return { apiKey: codersOauth.accessToken, source: "config:codersOauth", isOAuth: true };
+    if (codersOauth.expiresAt && Date.now() > codersOauth.expiresAt) {
+      console.warn("[auth] OAuth token expired. Please re-authenticate with: coders auth login");
+      // Fall through to return null — don't use expired token
+    } else {
+      return { apiKey: codersOauth.accessToken, source: "config:codersOauth", isOAuth: true };
+    }
   }
 
   return null;
@@ -161,7 +166,7 @@ export function isOAuthAuth(): boolean {
 export type ApiProvider = "firstParty" | "bedrock" | "vertex" | "foundry";
 
 export function getApiProvider(): ApiProvider {
-  if (process.env.ANTHROPIC_BEDROCK_BASE_URL || process.env.AWS_REGION) {
+  if (process.env.ANTHROPIC_BEDROCK_BASE_URL) {
     return "bedrock";
   }
   if (process.env.ANTHROPIC_VERTEX_PROJECT_ID || process.env.CLOUD_ML_REGION) {

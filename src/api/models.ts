@@ -13,6 +13,7 @@ export interface ModelVariants {
   xai?: string;
   together?: string;
   gemini?: string;
+  openai?: string;
 }
 
 export interface ModelEntry {
@@ -22,6 +23,8 @@ export interface ModelEntry {
   maxOutput: number;
   supportsThinking: boolean;
   supportsVision: boolean;
+  /** Reasoning capability: "none" | "standard" | "extended" | "deep" */
+  reasoning?: "none" | "standard" | "extended" | "deep";
 }
 
 export const MODEL_REGISTRY: Record<string, ModelEntry> = {
@@ -92,10 +95,11 @@ export const MODEL_REGISTRY: Record<string, ModelEntry> = {
       bedrock: "us.anthropic.claude-sonnet-4-6",
       vertex: "claude-sonnet-4-6",
     },
-    contextWindow: 200_000,
+    contextWindow: 1_000_000,
     maxOutput: 16_384,
     supportsThinking: true,
     supportsVision: true,
+    reasoning: "extended",
   },
   opus40: {
     alias: "opus40",
@@ -140,10 +144,11 @@ export const MODEL_REGISTRY: Record<string, ModelEntry> = {
       bedrock: "us.anthropic.claude-opus-4-6-v1",
       vertex: "claude-opus-4-6",
     },
-    contextWindow: 200_000,
+    contextWindow: 1_000_000,
     maxOutput: 32_768,
     supportsThinking: true,
     supportsVision: true,
+    reasoning: "extended",
   },
 
   // ── xAI Grok models ──────────────────────────────────────────────
@@ -216,6 +221,96 @@ export const MODEL_REGISTRY: Record<string, ModelEntry> = {
     supportsThinking: true,
     supportsVision: true,
   },
+
+  // ── OpenAI models (2026) ────────────────────────────────────────
+
+  gpt41: {
+    alias: "gpt41",
+    variants: { firstParty: "gpt-4.1", bedrock: "gpt-4.1", vertex: "gpt-4.1", openai: "gpt-4.1" },
+    contextWindow: 1_000_000,
+    maxOutput: 32_768,
+    supportsThinking: false,
+    supportsVision: true,
+    reasoning: "none",
+  },
+  gpt41mini: {
+    alias: "gpt41mini",
+    variants: { firstParty: "gpt-4.1-mini", bedrock: "gpt-4.1-mini", vertex: "gpt-4.1-mini", openai: "gpt-4.1-mini" },
+    contextWindow: 1_000_000,
+    maxOutput: 32_768,
+    supportsThinking: false,
+    supportsVision: true,
+    reasoning: "none",
+  },
+  gpt41nano: {
+    alias: "gpt41nano",
+    variants: { firstParty: "gpt-4.1-nano", bedrock: "gpt-4.1-nano", vertex: "gpt-4.1-nano", openai: "gpt-4.1-nano" },
+    contextWindow: 1_000_000,
+    maxOutput: 32_768,
+    supportsThinking: false,
+    supportsVision: true,
+    reasoning: "none",
+  },
+  gpt54: {
+    alias: "gpt54",
+    variants: { firstParty: "gpt-5.4", bedrock: "gpt-5.4", vertex: "gpt-5.4", openai: "gpt-5.4" },
+    contextWindow: 1_000_000,
+    maxOutput: 100_000,
+    supportsThinking: true,
+    supportsVision: true,
+    reasoning: "extended",
+  },
+  gpt54mini: {
+    alias: "gpt54mini",
+    variants: { firstParty: "gpt-5.4-mini", bedrock: "gpt-5.4-mini", vertex: "gpt-5.4-mini", openai: "gpt-5.4-mini" },
+    contextWindow: 1_000_000,
+    maxOutput: 32_768,
+    supportsThinking: true,
+    supportsVision: true,
+    reasoning: "standard",
+  },
+
+  // ── Google Gemini 3.x (2026) ──────────────────────────────────────
+
+  gemini31pro: {
+    alias: "gemini31pro",
+    variants: { firstParty: "gemini-3.1-pro", bedrock: "gemini-3.1-pro", vertex: "gemini-3.1-pro", gemini: "gemini-3.1-pro" },
+    contextWindow: 1_000_000,
+    maxOutput: 65_536,
+    supportsThinking: true,
+    supportsVision: true,
+    reasoning: "extended",
+  },
+  gemini3flash: {
+    alias: "gemini3flash",
+    variants: { firstParty: "gemini-3-flash", bedrock: "gemini-3-flash", vertex: "gemini-3-flash", gemini: "gemini-3-flash" },
+    contextWindow: 200_000,
+    maxOutput: 65_536,
+    supportsThinking: true,
+    supportsVision: true,
+    reasoning: "standard",
+  },
+
+  // ── xAI Grok 4.x (2026) ──────────────────────────────────────────
+
+  grok4: {
+    alias: "grok4",
+    variants: { firstParty: "grok-4", bedrock: "grok-4", vertex: "grok-4", xai: "grok-4" },
+    contextWindow: 256_000,
+    maxOutput: 32_768,
+    supportsThinking: true,
+    supportsVision: true,
+    reasoning: "extended",
+  },
+  grok41fast: {
+    alias: "grok41fast",
+    variants: { firstParty: "grok-4.1-fast", bedrock: "grok-4.1-fast", vertex: "grok-4.1-fast", xai: "grok-4.1-fast" },
+    contextWindow: 2_000_000,
+    maxOutput: 32_768,
+    supportsThinking: true,
+    supportsVision: true,
+    reasoning: "standard",
+  },
 };
 
 // ── User-facing aliases ────────────────────────────────────────────
@@ -227,16 +322,27 @@ const USER_ALIASES: Record<string, string> = {
   "sonnet[1m]": "sonnet46",
   "opus[1m]": "opus46",
   // xAI Grok aliases
-  grok: "grok3",
+  grok: "grok4",
   "grok-3": "grok3",
   "grok-3-mini": "grok3mini",
   "grok-2": "grok2",
+  "grok-4": "grok4",
+  "grok-4.1-fast": "grok41fast",
   // Gemini aliases
-  gemini: "gemini25pro",
-  "gemini-pro": "gemini25pro",
-  "gemini-flash": "gemini25flash",
+  gemini: "gemini31pro",
+  "gemini-pro": "gemini31pro",
+  "gemini-flash": "gemini3flash",
   "gemini-2.5-pro": "gemini25pro",
   "gemini-2.5-flash": "gemini25flash",
+  "gemini-3.1-pro": "gemini31pro",
+  "gemini-3-flash": "gemini3flash",
+  // OpenAI aliases
+  gpt: "gpt54",
+  "gpt-4.1": "gpt41",
+  "gpt-4.1-mini": "gpt41mini",
+  "gpt-4.1-nano": "gpt41nano",
+  "gpt-5.4": "gpt54",
+  "gpt-5.4-mini": "gpt54mini",
 };
 
 /**
@@ -245,7 +351,7 @@ const USER_ALIASES: Record<string, string> = {
  */
 export function resolveModelId(
   model: string,
-  provider: "firstParty" | "bedrock" | "vertex" | "foundry" | "xai" | "together" | "gemini" = "firstParty",
+  provider: "firstParty" | "bedrock" | "vertex" | "foundry" | "xai" | "together" | "gemini" | "openai" = "firstParty",
 ): string {
   // Check if it's a user alias first
   const aliasKey = USER_ALIASES[model] ?? model;

@@ -62,7 +62,15 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       transport = new StdioClientTransport({
         command: config.command,
         args: config.args,
-        env: config.env ? { ...process.env, ...config.env } as Record<string, string> : undefined,
+        env: (() => {
+          // Filter out sensitive env vars before passing to MCP server
+          const SENSITIVE_KEYS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GITHUB_TOKEN", "NPM_TOKEN", "CODERS_OAUTH_TOKEN"];
+          const filtered: Record<string, string> = {};
+          for (const [k, v] of Object.entries(process.env)) {
+            if (v !== undefined && !SENSITIVE_KEYS.includes(k)) filtered[k] = v;
+          }
+          return { ...filtered, ...(config.env ?? {}) };
+        })(),
       });
       break;
     }
@@ -102,6 +110,28 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
     transport,
     tools: toolNames,
   });
+
+  // Auto-reconnect on disconnect (up to 3 retries with backoff)
+  let retries = 0;
+  const MAX_RETRIES = 3;
+  transport.onclose = () => {
+    if (retries >= MAX_RETRIES) {
+      console.error(`[mcp-client] ${config.name} disconnected — max retries reached`);
+      connectedServers.delete(config.name);
+      return;
+    }
+    retries++;
+    const delay = retries * 2000;
+    console.warn(`[mcp-client] ${config.name} disconnected — reconnecting in ${delay}ms (attempt ${retries}/${MAX_RETRIES})`);
+    setTimeout(async () => {
+      try {
+        await connectMcpServer(config);
+        retries = 0; // reset on success
+      } catch (err) {
+        console.error(`[mcp-client] ${config.name} reconnect failed:`, err);
+      }
+    }, delay);
+  };
 
   return toolNames;
 }
@@ -205,7 +235,11 @@ function wrapMcpTool(serverName: string, mcpTool: McpToolDef, client: Client): T
     userFacingName() { return `${serverName}/${mcpTool.name}`; },
     isEnabled() { return connectedServers.has(serverName); },
     isConcurrencySafe() { return true; },
-    isReadOnly() { return false; },
+    isReadOnly() {
+      // Heuristic: tools with read-like names are likely read-only
+      const readPatterns = /^(list|get|read|search|query|describe|show|view|count|check|stat|info|fetch|find)/i;
+      return readPatterns.test(mcpTool.name);
+    },
     toAutoClassifierInput(input: Record<string, unknown>) {
       return `${serverName} ${mcpTool.name} ${JSON.stringify(input).slice(0, 100)}`;
     },
