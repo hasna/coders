@@ -232,8 +232,26 @@ export function updateSession(session: Session, _messages: Message[], metadata?:
 // ── Current session tracking ───────────────────────────────────────
 
 let _currentSessionId: string | null = null;
+let _sessionStartTime: number = Date.now();
 export function getCurrentSessionId(): string | null { return _currentSessionId; }
-export function setCurrentSessionId(id: string): void { _currentSessionId = id; }
+export function setCurrentSessionId(id: string): void { _currentSessionId = id; _sessionStartTime = Date.now(); }
+export function getSessionStartTime(): number { return _sessionStartTime; }
+
+// Ensure session is saved on unexpected exit
+let _crashHandlerInstalled = false;
+export function installCrashHandler(getSession: () => Session | null): void {
+  if (_crashHandlerInstalled) return;
+  _crashHandlerInstalled = true;
+  const save = () => {
+    try {
+      const session = getSession();
+      if (session) saveSession(session);
+    } catch { /* best effort */ }
+  };
+  process.on("SIGTERM", save);
+  process.on("SIGINT", save);
+  process.on("beforeExit", save);
+}
 
 // ── Conversation Checkpoints ────────────────────────────────────────
 

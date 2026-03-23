@@ -267,7 +267,7 @@ export async function runAgentLoop(
       content: toolResults.map((r) => ({
         type: "tool_result" as const,
         tool_use_id: r.toolUseId,
-        content: r.error ?? (typeof r.data === "string" ? r.data : JSON.stringify(r.data)),
+        content: r.error ?? (typeof r.data === "string" ? r.data : JSON.stringify(r.data ?? "(no output)")),
         is_error: r.isError,
       })),
     };
@@ -328,21 +328,30 @@ async function executeTools(
     }
   }
 
-  // Execute concurrent tools in parallel
+  // Execute all tools, preserving original block order in results
+  const resultMap = new Map<string, ToolExecutionResult>();
+
+  // Concurrent tools in parallel
   if (concurrentTools.length > 0) {
     const concurrentResults = await Promise.all(
       concurrentTools.map(({ block, handler }) =>
         executeSingleTool(block, handler, options),
       ),
     );
-    results.push(...concurrentResults);
+    for (const r of concurrentResults) resultMap.set(r.toolUseId, r);
   }
 
-  // Execute sequential tools one at a time
+  // Sequential tools one at a time
   for (const { block, handler } of sequentialTools) {
     if (options.signal?.aborted) break;
     const result = await executeSingleTool(block, handler, options);
-    results.push(result);
+    resultMap.set(result.toolUseId, result);
+  }
+
+  // Rebuild results in original tool_use block order
+  for (const { block } of [...concurrentTools, ...sequentialTools]) {
+    const r = resultMap.get(block.id);
+    if (r) results.push(r);
   }
 
   return results;
