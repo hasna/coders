@@ -67,7 +67,7 @@ export const askUserQuestionTool: Tool<AskUserInput, AskUserOutput> = {
   userFacingName() { return ""; },
   isEnabled() { return true; },
   isConcurrencySafe() { return true; },
-  isReadOnly() { return true; },
+  isReadOnly() { return false; },
   toAutoClassifierInput(input) { return input.questions.map(q => q.question).join(" | "); },
   requiresUserInteraction() { return true; },
 
@@ -90,13 +90,16 @@ export const askUserQuestionTool: Tool<AskUserInput, AskUserOutput> = {
   },
 
   async call(input): Promise<ToolCallResult<AskUserOutput>> {
-    // The answers are filled in by the permission UI component
+    // The answers are filled in by the permission UI (interactive picker in app.tsx)
+    const answers = input.answers ?? {};
+    const hasAnswers = Object.keys(answers).length > 0;
     return {
       data: {
         questions: input.questions,
-        answers: input.answers ?? {},
+        answers,
         annotations: input.annotations,
       },
+      error: hasAnswers ? undefined : "User skipped the questions (pressed Escape). Try rephrasing or proceeding with defaults.",
     };
   },
 

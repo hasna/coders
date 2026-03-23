@@ -103,7 +103,10 @@ export const taskGetTool: Tool<TaskGetInput, { task: Task | null }> = {
   toAutoClassifierInput(input) { return input.taskId; },
 
   async checkPermissions(input) { return { behavior: "allow", updatedInput: input }; },
-  async validateInput() { return { result: true }; },
+  async validateInput(input) {
+    if (!input.taskId?.trim()) return { result: false, message: "taskId is required", errorCode: 1 };
+    return { result: true };
+  },
 
   async call(input): Promise<ToolCallResult<{ task: Task | null }>> {
     const todos = getTodosIntegration();

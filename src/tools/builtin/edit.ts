@@ -153,6 +153,7 @@ export const editTool: Tool<EditInput, EditOutput> = {
             originalFile: "",
             gitDiff: undefined,
           },
+          error: `File too large (${(fileSize / 1024 / 1024).toFixed(1)}MB > 50MB limit). Split the file or use Bash tool for large file edits.`,
         };
       }
     } catch { /* statSync failure will be caught by readFileSync below */ }
@@ -188,7 +189,7 @@ export const editTool: Tool<EditInput, EditOutput> = {
 
     // Save checkpoint BEFORE writing (for /rewind support)
     try {
-      const cpId = randomUUID().slice(0, 8);
+      const cpId = randomUUID();
       dbRun(
         "INSERT INTO checkpoints (id, session_id, file_path, original_content, edit_operation) VALUES (?, ?, ?, ?, ?)",
         [cpId, "current", resolved, originalContent, JSON.stringify({ old_string: input.old_string, new_string: input.new_string })],
@@ -281,64 +282,59 @@ interface DiffHunk {
 }
 
 function findDiffHunks(oldLines: string[], newLines: string[], context: number): DiffHunk[] {
-  // Simple LCS-based diff: find matching lines, everything else is a change
+  // Find changed line ranges by comparing old vs new line-by-line
   const hunks: DiffHunk[] = [];
-  let oi = 0, ni = 0;
+  const maxLen = Math.max(oldLines.length, newLines.length);
+  let i = 0;
 
-  while (oi < oldLines.length || ni < newLines.length) {
+  while (i < maxLen) {
     // Skip matching lines
-    if (oi < oldLines.length && ni < newLines.length && oldLines[oi] === newLines[ni]) {
-      oi++;
-      ni++;
+    if (i < oldLines.length && i < newLines.length && oldLines[i] === newLines[i]) {
+      i++;
       continue;
     }
 
-    // Found a change — collect the changed region
-    const changeOldStart = Math.max(0, oi - context);
-    const changeNewStart = Math.max(0, ni - context);
+    // Found a change — find the end of the differing region
+    const changeStart = i;
+    // Scan forward in both to find where they resync
+    let oi = i, ni = i;
+    while (oi < oldLines.length || ni < newLines.length) {
+      // Check if we've resynced (next N lines match)
+      let synced = true;
+      for (let k = 0; k < 3 && synced; k++) {
+        if (oi + k >= oldLines.length || ni + k >= newLines.length || oldLines[oi + k] !== newLines[ni + k]) synced = false;
+      }
+      if (synced && oi > changeStart) break;
+
+      // Advance the shorter side, or both
+      if (oi < oldLines.length && ni < newLines.length) { oi++; ni++; }
+      else if (oi < oldLines.length) oi++;
+      else ni++;
+    }
+
+    // Build hunk with context
+    const ctxBefore = Math.max(0, changeStart - context);
+    const ctxAfterOld = Math.min(oi + context, oldLines.length);
+    const ctxAfterNew = Math.min(ni + context, newLines.length);
     const hunkLines: string[] = [];
 
-    // Context before
-    for (let c = Math.max(0, oi - context); c < oi; c++) {
-      hunkLines.push(` ${oldLines[c]}`);
+    for (let c = ctxBefore; c < changeStart; c++) hunkLines.push(` ${oldLines[c]}`);
+    for (let c = changeStart; c < oi; c++) hunkLines.push(`-${oldLines[c]}`);
+    for (let c = changeStart; c < ni; c++) hunkLines.push(`+${newLines[c]}`);
+    for (let c = oi; c < ctxAfterOld && c < oldLines.length; c++) {
+      if (c < newLines.length && oldLines[c] === newLines[c + (ni - oi)]) hunkLines.push(` ${oldLines[c]}`);
     }
-
-    // Collect removed lines
-    const removedStart = oi;
-    while (oi < oldLines.length && (ni >= newLines.length || oldLines[oi] !== newLines[ni])) {
-      hunkLines.push(`-${oldLines[oi]}`);
-      oi++;
-      if (hunkLines.length > 100) break;
-    }
-
-    // Collect added lines
-    const addedStart = ni;
-    while (ni < newLines.length && (oi >= oldLines.length || oldLines[oi] !== newLines[ni])) {
-      hunkLines.push(`+${newLines[ni]}`);
-      ni++;
-      if (hunkLines.length > 200) break;
-    }
-
-    // Context after
-    const afterEnd = Math.min(oi + context, oldLines.length);
-    for (let c = oi; c < afterEnd && c < oldLines.length && ni + (c - oi) < newLines.length; c++) {
-      if (oldLines[c] === newLines[ni + (c - oi)]) {
-        hunkLines.push(` ${oldLines[c]}`);
-      }
-    }
-
-    const oldCount = (oi - changeOldStart) + Math.min(context, oldLines.length - oi);
-    const newCount = (ni - changeNewStart) + Math.min(context, newLines.length - ni);
 
     hunks.push({
-      oldStart: changeOldStart,
-      oldCount: Math.max(oldCount, 1),
-      newStart: changeNewStart,
-      newCount: Math.max(newCount, 1),
+      oldStart: ctxBefore,
+      oldCount: ctxAfterOld - ctxBefore,
+      newStart: ctxBefore,
+      newCount: ctxAfterNew - ctxBefore,
       lines: hunkLines,
     });
 
-    if (hunks.length > 20) break; // limit hunks
+    i = Math.max(oi, ni);
+    if (hunks.length > 20) break;
   }
 
   return hunks;

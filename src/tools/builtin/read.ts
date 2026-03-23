@@ -172,6 +172,16 @@ export const readTool: Tool<ReadInput, ReadOutput> = {
 // ── Text file reading ──────────────────────────────────────────────
 
 function readTextFile(filePath: string, input: ReadInput): ToolCallResult<ReadOutput> {
+  // Guard against very large files (>50MB)
+  try {
+    const size = statSync(filePath).size;
+    if (size > 50 * 1024 * 1024) {
+      return {
+        data: { content: `File too large (${(size / 1024 / 1024).toFixed(1)}MB). Use offset/limit to read a portion, or use Bash: head -n 100 "${filePath}"`, filePath, totalLines: 0, linesRead: 0, startLine: 0 },
+        error: `File exceeds 50MB limit (${(size / 1024 / 1024).toFixed(1)}MB)`,
+      };
+    }
+  } catch { /* statSync failure will be caught below */ }
   const rawContent = readFileSync(filePath, "utf-8");
   const allLines = rawContent.split("\n");
   const totalLines = allLines.length;
@@ -206,11 +216,28 @@ function readTextFile(filePath: string, input: ReadInput): ToolCallResult<ReadOu
 // ── Image file reading ─────────────────────────────────────────────
 
 function readImageFile(filePath: string, input: ReadInput): ToolCallResult<ReadOutput> {
-  // Return a description — the actual multimodal content would be handled
-  // by the UI layer which can send base64 image content blocks
   const stat = statSync(filePath);
   const ext = extname(filePath).toLowerCase();
-  const content = `[Image file: ${filePath} (${ext}, ${formatBytes(stat.size)})]`;
+
+  // Reject files over 10MB
+  if (stat.size > 10 * 1024 * 1024) {
+    return {
+      data: { content: `[Image too large: ${formatBytes(stat.size)}]`, filePath, totalLines: 1, linesRead: 1, startLine: 1 },
+      error: `Image exceeds 10MB limit (${formatBytes(stat.size)})`,
+    };
+  }
+
+  // Read as base64 for multimodal model consumption
+  const raw = readFileSync(filePath);
+  const base64 = raw.toString("base64");
+  const mimeTypes: Record<string, string> = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+  };
+  const mime = mimeTypes[ext] ?? "image/png";
+
+  // Return both metadata and base64 content
+  const content = `[Image: ${filePath} (${ext}, ${formatBytes(stat.size)})]\ndata:${mime};base64,${base64}`;
 
   return {
     data: {
@@ -226,21 +253,43 @@ function readImageFile(filePath: string, input: ReadInput): ToolCallResult<ReadO
 // ── PDF file reading ───────────────────────────────────────────────
 
 function readPdfFile(filePath: string, input: ReadInput): ToolCallResult<ReadOutput> {
-  // PDF reading requires external library (pdf-parse or similar)
-  // For now, return a placeholder
   const stat = statSync(filePath);
   const pages = input.pages ?? "1-5";
-  const content = `[PDF file: ${filePath} (${formatBytes(stat.size)}, requested pages: ${pages}). PDF reading requires pdf-parse library — install to enable.]`;
 
-  return {
-    data: {
-      content,
-      filePath,
-      totalLines: 1,
-      linesRead: 1,
-      startLine: 1,
-    },
-  };
+  // Try pdftotext (poppler-utils) — available on most systems
+  try {
+    const { execFileSync } = require("child_process");
+    // Parse page range: "1-5" → first=1, last=5
+    const pageMatch = pages.match(/^(\d+)(?:-(\d+))?$/);
+    const args = ["-layout"];
+    if (pageMatch) {
+      args.push("-f", pageMatch[1], "-l", pageMatch[2] ?? pageMatch[1]);
+    }
+    args.push(filePath, "-");
+    const text = execFileSync("pdftotext", args, { encoding: "utf-8", timeout: 15000, maxBuffer: 5 * 1024 * 1024 }) as string;
+    const lines = text.split("\n");
+    return {
+      data: {
+        content: text || `[PDF extracted but empty for pages ${pages}]`,
+        filePath,
+        totalLines: lines.length,
+        linesRead: lines.length,
+        startLine: 1,
+      },
+    };
+  } catch {
+    // pdftotext not available — return helpful error
+    return {
+      data: {
+        content: `[PDF: ${filePath} (${formatBytes(stat.size)}, pages: ${pages})]`,
+        filePath,
+        totalLines: 1,
+        linesRead: 1,
+        startLine: 1,
+      },
+      error: `PDF text extraction failed. Install poppler-utils: brew install poppler (macOS) or apt install poppler-utils (Linux).`,
+    };
+  }
 }
 
 // ── Jupyter notebook reading ───────────────────────────────────────
@@ -279,19 +328,25 @@ function readNotebookFile(filePath: string, input: ReadInput): ToolCallResult<Re
       lines.push("");
     }
 
-    const content = lines.join("\n");
+    const totalLines = lines.length;
+    const startLine = input.offset ?? 1;
+    const limit = input.limit ?? totalLines;
+    const sliced = lines.slice(startLine - 1, startLine - 1 + limit);
+    const content = sliced.join("\n");
     return {
       data: {
         content,
         filePath,
-        totalLines: lines.length,
-        linesRead: lines.length,
-        startLine: 1,
+        totalLines,
+        linesRead: sliced.length,
+        startLine,
       },
     };
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     return {
-      data: { content: "[Error reading notebook]", filePath, totalLines: 1, linesRead: 1, startLine: 1 },
+      data: { content: `[Error reading notebook: ${msg}]`, filePath, totalLines: 1, linesRead: 1, startLine: 1 },
+      error: `Failed to parse notebook: ${msg}`,
     };
   }
 }

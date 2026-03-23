@@ -186,7 +186,7 @@ export const exitPlanModeTool: Tool<Record<string, never>, ExitPlanOutput> = {
       return {
         type: "tool_result",
         tool_use_id: toolUseId,
-        content: "User has approved exiting plan mode. You can now proceed.",
+        content: "Exited plan mode. You can now write code and use all tools.",
       };
     }
 

@@ -102,6 +102,7 @@ interface RunningAgent {
   status: "running" | "completed" | "failed";
   result?: string;
   error?: string;
+  abort?: AbortController;
 }
 
 const runningAgents = new Map<string, RunningAgent>();
@@ -179,19 +180,52 @@ export const agentTool: Tool<AgentInput, AgentOutput> = {
       typeDef,
     );
 
+    // Create git worktree for isolation if requested
+    let worktreePath: string | null = null;
+    let worktreeBranch: string | null = null;
+    if (input.isolation === "worktree") {
+      try {
+        const { execSync } = require("child_process");
+        worktreeBranch = `agent-${agentId.slice(0, 8)}`;
+        worktreePath = `/tmp/coders-worktree-${agentId.slice(0, 12)}`;
+        execSync(`git worktree add -b ${worktreeBranch} ${worktreePath}`, { stdio: "pipe", timeout: 10000 });
+        // Change cwd for this agent's execution
+        process.chdir(worktreePath);
+      } catch (e) {
+        // Worktree creation failed — continue without isolation
+        worktreePath = null;
+        worktreeBranch = null;
+      }
+    }
+
     // Build agent-specific tool handlers
-    const toolHandlers: ToolHandler[] = availableTools
+    const toolHandlers: ToolHandler[] = await Promise.all(availableTools
       .filter((t) => t.name !== AGENT_TOOL) // agents can't spawn more agents (prevent infinite recursion)
-      .map((t) => ({
-        name: t.name,
-        description: typeof t.description === "function" ? `Tool: ${t.name}` : String(t.description),
-        inputSchema: { type: "object" as const, properties: {} },
-        isReadOnly: t.isReadOnly(),
-        isConcurrencySafe: t.isConcurrencySafe(),
-        call: async (toolInput: Record<string, unknown>, _toolCtx: any) => {
-          const result = await t.call(toolInput, context);
-          return { data: result.data };
-        },
+      .map(async (t) => {
+        // Extract the real JSON schema from the Zod input schema
+        let schemaObj: Record<string, unknown> = { type: "object", properties: {} };
+        try {
+          if (t.inputSchema && typeof (t.inputSchema as any).shape === "object") {
+            // Convert Zod shape to JSON Schema properties
+            const shape = (t.inputSchema as any).shape;
+            const properties: Record<string, unknown> = {};
+            for (const [key, val] of Object.entries(shape)) {
+              properties[key] = { type: "string", description: (val as any)?._def?.description ?? key };
+            }
+            schemaObj = { type: "object", properties };
+          }
+        } catch { /* fallback to empty schema */ }
+        return {
+          name: t.name,
+          description: typeof t.description === "function" ? await t.description() : String(t.description),
+          inputSchema: schemaObj as { type: "object"; properties: Record<string, unknown> },
+          isReadOnly: t.isReadOnly(),
+          isConcurrencySafe: t.isConcurrencySafe(),
+          call: async (toolInput: Record<string, unknown>, _toolCtx: any) => {
+            const result = await t.call(toolInput, context);
+            return { data: result.data };
+          },
+        };
       }));
 
     // Build system prompt for sub-agent
@@ -240,10 +274,21 @@ export const agentTool: Tool<AgentInput, AgentOutput> = {
 
       agentRecord.status = "completed";
       agentRecord.result = resultText;
+      setTimeout(() => runningAgents.delete(agentId), 5 * 60 * 1000);
+
+      // Cleanup worktree if used
+      if (worktreePath) {
+        try {
+          const { execSync } = require("child_process");
+          process.chdir(context.options?.projectDir ?? process.env.HOME ?? "/");
+          execSync(`git worktree remove ${worktreePath} --force`, { stdio: "pipe", timeout: 10000 });
+          if (worktreeBranch) execSync(`git branch -D ${worktreeBranch}`, { stdio: "pipe", timeout: 5000 });
+        } catch { /* best effort cleanup */ }
+      }
 
       return {
         data: {
-          result: resultText,
+          result: resultText + (worktreePath ? `\n[Ran in isolated worktree: ${worktreeBranch}]` : ""),
           agentId,
           agentType,
           model,
@@ -333,6 +378,7 @@ function runAgentInBackground(
   parentContext: any,
 ): void {
   const abortController = new AbortController();
+  record.abort = abortController;
 
   runAgentLoop(
     [{ role: "user", content: input.prompt }],
@@ -347,11 +393,19 @@ function runAgentInBackground(
       agentId,
       maxTurns: 25,
       onTextDelta: (_text) => {
-        // Track progress in the background task manager
         updateBgTask(bgTaskId, {
-          progress: {
-            lastActivity: new Date().toISOString(),
-          },
+          progress: { lastActivity: new Date().toISOString() },
+        });
+      },
+      onToolUseStart: (toolName: string, _toolUseId: string, toolInput: Record<string, unknown>) => {
+        // Surface sub-agent tool activity to parent UI via background task description
+        const summary = toolInput.command ? String(toolInput.command).slice(0, 60)
+          : toolInput.file_path ? String(toolInput.file_path)
+          : toolInput.pattern ? `/${toolInput.pattern}/`
+          : "";
+        updateBgTask(bgTaskId, {
+          description: `${toolName}${summary ? ` ${summary}` : ""}`,
+          progress: { lastActivity: new Date().toISOString() },
         });
       },
     },
@@ -370,6 +424,8 @@ function runAgentInBackground(
       },
     });
     completeBgTask(bgTaskId, resultText);
+    // Clean up after 5 minutes to prevent memory leak
+    setTimeout(() => runningAgents.delete(agentId), 5 * 60 * 1000);
   }).catch((error) => {
     const errorMsg = error instanceof Error ? error.message : String(error);
     record.status = "failed";
@@ -377,6 +433,8 @@ function runAgentInBackground(
 
     // Update background task manager
     failBgTask(bgTaskId, errorMsg);
+    // Clean up after 5 minutes
+    setTimeout(() => runningAgents.delete(agentId), 5 * 60 * 1000);
   });
 }
 

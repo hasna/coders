@@ -52,22 +52,41 @@ export const webSearchTool: Tool<WebSearchInput, WebSearchOutput> = {
     const client = getApiClient();
 
     try {
+      // Build web_search server tool with optional domain filters
+      const webSearchTool: Record<string, unknown> = {
+        type: "web_search_20250305",
+        name: "web_search",
+      };
+      if (input.allowed_domains?.length) webSearchTool.allowed_domains = input.allowed_domains;
+      if (input.blocked_domains?.length) webSearchTool.blocked_domains = input.blocked_domains;
+
       const response = await client.createMessage({
         model: context.options?.mainLoopModel ?? "sonnet",
-        messages: [{ role: "user", content: `Search the web for: ${input.query}` }],
-        systemPrompt: "You are performing a web search. Return the results.",
+        messages: [{ role: "user", content: input.query }],
+        serverTools: [webSearchTool],
         maxTokens: 4096,
         signal: context.abortController?.signal,
       });
 
-      const textBlocks = response.content
-        .filter((b): b is { type: "text"; text: string } => b.type === "text")
-        .map(b => b.text);
+      // Extract text and web_search_tool_result blocks
+      const results: string[] = [];
+      for (const block of response.content) {
+        if (block.type === "text") results.push((block as any).text);
+        else if (block.type === "web_search_tool_result") {
+          // Extract search result URLs/titles
+          const searchResults = (block as any).content ?? [];
+          for (const sr of searchResults) {
+            if (sr.type === "web_search_result") {
+              results.push(`[${sr.title}](${sr.url})\n${sr.encrypted_content ?? ""}`);
+            }
+          }
+        }
+      }
 
       return {
         data: {
           query: input.query,
-          results: textBlocks,
+          results,
           durationSeconds: (performance.now() - start) / 1000,
         },
       };

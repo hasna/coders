@@ -63,11 +63,12 @@ export const lspTool: Tool<LSPInput, LSPOutput> = {
     return {
       data: {
         operation: input.operation,
-        result: `LSP ${input.operation} at ${input.filePath}:${input.line}:${input.character} — LSP server not yet connected. Configure LSP servers via plugins.`,
+        result: "",
         filePath: input.filePath,
         resultCount: 0,
         fileCount: 0,
       },
+      error: `LSP not available. No language server is connected. Use Grep for code search, or configure LSP via plugins.`,
     };
   },
 

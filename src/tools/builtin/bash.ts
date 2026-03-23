@@ -31,28 +31,51 @@ import {
 // ── Dangerous command patterns (always blocked) ────────────────────
 
 const DANGEROUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\brm\s+-rf\s+\/\s*$/,    reason: "Recursive delete of root filesystem" },
-  { pattern: /\brm\s+-rf\s+~\//,        reason: "Recursive delete of home directory" },
-  { pattern: /\brm\s+-rf\s+\*/,         reason: "Recursive delete with wildcard" },
-  { pattern: /\bmkfs\b/,                reason: "Format filesystem" },
-  { pattern: /\bdd\s+.*of=\/dev\//,     reason: "Direct write to device" },
-  { pattern: />\s*\/dev\/sd[a-z]/,      reason: "Redirect to disk device" },
-  { pattern: /\b:(){ :\|:& };:/,        reason: "Fork bomb" },
-  { pattern: /\bchmod\s+-R\s+777\s+\//,reason: "Recursive chmod 777 on root" },
-  { pattern: /\bchown\s+-R\s+.*\s+\//,  reason: "Recursive chown on root" },
+  // Use \s+ (flexible whitespace) instead of fixed \s to match normalized commands
+  { pattern: /\brm\s+-r[f ]?\s+\/\s*$/,  reason: "Recursive delete of root filesystem" },
+  { pattern: /\brm\s+-r[f ]?\s+~\//,     reason: "Recursive delete of home directory" },
+  { pattern: /\brm\s+-r[f ]?\s+\*/,      reason: "Recursive delete with wildcard" },
+  { pattern: /\bmkfs\b/,                  reason: "Format filesystem" },
+  { pattern: /\bdd\s+.*of=\/dev\//,       reason: "Direct write to device" },
+  { pattern: />\s*\/dev\/sd[a-z]/,        reason: "Redirect to disk device" },
+  { pattern: /:\(\)\s*\{.*:\|:.*&\s*\}\s*;?\s*:/, reason: "Fork bomb" },
+  { pattern: /\bchmod\s+-R\s+777\s+\//,   reason: "Recursive chmod 777 on root" },
+  { pattern: /\bchown\s+-R\s+.*\s+\//,    reason: "Recursive chown on root" },
   { pattern: /\b(curl|wget)\s.*\|\s*(sh|bash|zsh|ksh)\b/, reason: "Pipe remote script to shell" },
-  { pattern: /\bdd\s+if=/, reason: "Direct disk copy" },
-  { pattern: /\bsudo\s+rm\s+-rf\b/, reason: "Recursive delete as root" },
-  { pattern: /\b\/etc\/passwd\b/,        reason: "Access to passwd file" },
-  { pattern: /\b\/etc\/shadow\b/,        reason: "Access to shadow file" },
+  { pattern: /\bdd\s+if=/,                reason: "Direct disk copy" },
+  { pattern: /\bsudo\s+rm\s+-r/,          reason: "Recursive delete as root" },
+  { pattern: /\/etc\/passwd\b/,            reason: "Access to passwd file" },
+  { pattern: /\/etc\/shadow\b/,            reason: "Access to shadow file" },
+  { pattern: /\bsudo\s+chmod\b/,          reason: "Sudo chmod" },
+  { pattern: /\bsudo\s+chown\b/,          reason: "Sudo chown" },
 ];
 
 /**
+ * Normalize a shell command for security pattern matching.
+ * Strips common evasion tricks: extra whitespace, quote insertion, backslash escapes.
+ */
+function normalizeForSecurity(command: string): string {
+  return command
+    // Collapse whitespace (tabs, multiple spaces)
+    .replace(/\s+/g, " ")
+    // Remove single-char quote wrapping: r''m → rm, r""m → rm
+    .replace(/([a-zA-Z])['"]{1,2}([a-zA-Z])/g, "$1$2")
+    // Remove backslash escapes in command names: r\m → rm
+    .replace(/\\([a-zA-Z])/g, "$1")
+    // Strip $'' ANSI-C quoting around single chars
+    .replace(/\$'\\x[0-9a-fA-F]{2}'/g, "?")
+    .trim();
+}
+
+/**
  * Check if command contains dangerous patterns that should be blocked.
+ * Normalizes the command first to defeat common evasion tricks.
  */
 export function isDangerousCommand(command: string): { dangerous: boolean; reason?: string } {
+  // Check both raw and normalized forms
+  const normalized = normalizeForSecurity(command);
   for (const { pattern, reason } of DANGEROUS_PATTERNS) {
-    if (pattern.test(command)) {
+    if (pattern.test(command) || pattern.test(normalized)) {
       return { dangerous: true, reason };
     }
   }
@@ -105,7 +128,8 @@ const BashOutputSchema = z.object({
 const READ_ONLY_COMMANDS = new Set([
   "ls", "dir", "cat", "head", "tail", "less", "more",
   "grep", "rg", "ag", "find", "fd", "locate",
-  "sort", "uniq", "wc", "cut", "tr", "awk", "sed",
+  "sort", "uniq", "wc", "cut", "tr",
+  // NOTE: awk and sed removed — both support in-place editing (-i flag)
   "diff", "comm", "tree", "file", "stat",
   "ps", "top", "htop", "lsof", "pgrep", "netstat", "ss",
   "date", "hostname", "whoami", "uname", "arch", "uptime",
@@ -132,7 +156,7 @@ const GIT_READ_ONLY_SUBCOMMANDS = new Set([
   "diff", "log", "status", "show", "branch", "tag",
   "ls-remote", "ls-files", "ls-tree", "rev-parse", "rev-list",
   "describe", "shortlog", "blame", "grep", "reflog",
-  "config", "remote", "stash", "worktree",
+  // NOTE: config, remote, stash, worktree are NOT read-only — they can modify state
 ]);
 
 const NPM_READ_ONLY_SUBCOMMANDS = new Set([
@@ -178,10 +202,14 @@ function splitCommandChain(command: string): string[] {
       inDoubleQuote = !inDoubleQuote;
       current += ch;
     } else if (!inSingleQuote && !inDoubleQuote) {
-      if (ch === "|" || ch === ";" || (ch === "&" && command[i + 1] === "&") || (ch === "|" && command[i + 1] === "|")) {
+      // Check two-char operators first (&&, ||), then single-char (|, ;)
+      if ((ch === "&" && command[i + 1] === "&") || (ch === "|" && command[i + 1] === "|")) {
         if (current.trim()) parts.push(current.trim());
         current = "";
-        if ((ch === "&" && command[i + 1] === "&") || (ch === "|" && command[i + 1] === "|")) i++; // skip next char
+        i++; // skip next char
+      } else if (ch === "|" || ch === ";") {
+        if (current.trim()) parts.push(current.trim());
+        current = "";
       } else {
         current += ch;
       }
@@ -221,16 +249,17 @@ function isReadOnlyPart(part: string): boolean {
       const subCmd = tokens[1];
       return subCmd ? DOCKER_READ_ONLY_SUBCOMMANDS.has(subCmd) : false;
     }
-    // curl is read-only only if no -X POST/PUT/DELETE, no --data, no -d
+    // curl is read-only only if no write flags
     if (baseCmd === "curl") {
-      const dangerous = ["-X", "--request", "-d", "--data", "--data-raw", "--data-binary", "--upload-file"];
+      const dangerous = ["-X", "--request", "-d", "--data", "--data-raw", "--data-binary", "--upload-file", "-o", "--output", "-O", "--remote-name"];
       return !tokens.some(t => dangerous.includes(t));
     }
     return true;
   }
 
-  // Check if any token is a read-only keyword (e.g., "terraform plan", "helm list")
-  if (tokens.length > 1 && READ_ONLY_KEYWORDS.has(tokens[1])) {
+  // Check if second token is a read-only keyword — but ONLY for known safe base commands
+  // (prevents "rm help" or "chmod list" from being auto-approved)
+  if (tokens.length > 1 && READ_ONLY_KEYWORDS.has(tokens[1]) && READ_ONLY_COMMANDS.has(baseCmd)) {
     return true;
   }
 
@@ -287,6 +316,29 @@ export const bashTool: Tool<BashInput, BashOutput> = {
       try { dbRun("INSERT INTO audit_log (tool_name, input_summary, was_allowed) VALUES ('Bash', ?, 0)", [input.command.slice(0, 200)]); } catch {}
       return { result: false, message: `Blocked dangerous command: ${danger.reason}`, errorCode: 3 };
     }
+
+    // Sandbox enforcement: check filesystem write restrictions
+    try {
+      const { getSettings } = require("../../config/loader.js");
+      const sandbox = getSettings().sandbox;
+      if (sandbox?.filesystem?.denyWrite?.length) {
+        const cmd = input.command;
+        for (const denied of sandbox.filesystem.denyWrite) {
+          if (cmd.includes(denied)) {
+            return { result: false, message: `Sandbox: write access denied to "${denied}"`, errorCode: 4 };
+          }
+        }
+      }
+      if (sandbox?.network?.deniedDomains?.length) {
+        const cmd = input.command;
+        for (const denied of sandbox.network.deniedDomains) {
+          if (cmd.includes(denied)) {
+            return { result: false, message: `Sandbox: network access denied to "${denied}"`, errorCode: 5 };
+          }
+        }
+      }
+    } catch { /* sandbox config not available */ }
+
     return { result: true };
   },
 
@@ -345,12 +397,15 @@ export const bashTool: Tool<BashInput, BashOutput> = {
         task.done = true;
         task.exitCode = code;
         completeBgTask(taskId, output, code ?? undefined);
+        // Clean up after 5 minutes to prevent memory leak
+        setTimeout(() => backgroundTasks.delete(taskId), 5 * 60 * 1000);
       });
 
       child.on("error", (err) => {
         task.done = true;
         task.exitCode = 1;
         failBgTask(taskId, err.message);
+        setTimeout(() => backgroundTasks.delete(taskId), 5 * 60 * 1000);
       });
 
       return {
@@ -378,12 +433,13 @@ export const bashTool: Tool<BashInput, BashOutput> = {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
+      const MAX_OUTPUT = 5 * 1024 * 1024; // 5MB cap per stream
       child.stdout?.on("data", (data: Buffer) => {
-        stdout += data.toString();
+        if (stdout.length < MAX_OUTPUT) stdout += data.toString();
       });
 
       child.stderr?.on("data", (data: Buffer) => {
-        stderr += data.toString();
+        if (stderr.length < MAX_OUTPUT) stderr += data.toString();
       });
 
       // Enforce timeout — spawn() does NOT support timeout option natively
@@ -399,11 +455,12 @@ export const bashTool: Tool<BashInput, BashOutput> = {
         child.kill("SIGTERM");
         setTimeout(() => child.kill("SIGKILL"), 5000);
       };
-      context.abortController?.signal.addEventListener("abort", onAbort, { once: true });
+      const abortSignal = context.abortController?.signal ?? (context as any).abortSignal;
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
 
       child.on("close", (code, signal) => {
         clearTimeout(timeoutTimer);
-        context.abortController?.signal.removeEventListener("abort", onAbort);
+        abortSignal?.removeEventListener("abort", onAbort);
         const durationMs = performance.now() - startTime;
 
         if (signal === "SIGTERM" || signal === "SIGKILL") {
@@ -429,7 +486,8 @@ export const bashTool: Tool<BashInput, BashOutput> = {
       });
 
       child.on("error", (err) => {
-        context.abortController?.signal.removeEventListener("abort", onAbort);
+        clearTimeout(timeoutTimer);
+        abortSignal?.removeEventListener("abort", onAbort);
         resolve({
           data: {
             stdout: "",

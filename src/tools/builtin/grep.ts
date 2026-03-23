@@ -11,7 +11,9 @@
  *   - Timeout with partial results
  *   - Default ignore patterns (.git, node_modules, etc.)
  */
-import { execFileSync } from "child_process";
+import { execFileSync, execFile } from "child_process";
+import { promisify } from "util";
+const execFileAsync = promisify(execFile);
 import { resolve, isAbsolute } from "path";
 import { z } from "zod";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
@@ -89,9 +91,10 @@ function resolveRipgrepBinary(): string {
   // Check env override
   if (process.env.RIPGREP_PATH) return process.env.RIPGREP_PATH;
 
-  // Try system rg
+  // Try system rg — use "where" on Windows, "which" elsewhere
   try {
-    execFileSync("which", ["rg"], { stdio: "pipe" });
+    const whichCmd = process.platform === "win32" ? "where" : "which";
+    execFileSync(whichCmd, ["rg"], { stdio: "pipe" });
     return "rg";
   } catch {
     // Fallback: try common paths
@@ -203,20 +206,18 @@ export const grepTool: Tool<GrepInput, GrepOutput> = {
     args.push("--", input.pattern, searchPath);
 
     try {
-      const result = execFileSync(rg, args, {
+      const { stdout: result } = await execFileAsync(rg, args, {
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024, // 10MB
         timeout: 30_000,
-        stdio: ["pipe", "pipe", "pipe"],
       });
 
       return processOutput(result, input);
     } catch (error: unknown) {
-      const err = error as { status?: number; stdout?: string; stderr?: string; killed?: boolean };
+      const err = error as { code?: number; stdout?: string; stderr?: string; killed?: boolean };
 
       // Exit code 1 = no matches (not an error), but only if stderr is empty.
-      // If stderr has content with exit code 1, it's a real error (e.g. invalid regex).
-      if (err.status === 1 && (!err.stderr || err.stderr.trim() === "")) {
+      if (err.code === 1 && (!err.stderr || err.stderr.trim() === "")) {
         return {
           data: { content: "No matches found.", matchCount: 0, fileCount: 0, truncated: false },
         };
@@ -276,12 +277,22 @@ function processOutput(
     }
   }
 
-  // Count unique files
+  // Count unique files — handle content mode (file:line:text) vs files_with_matches (file)
   const fileSet = new Set<string>();
+  const isContentMode = (input.output_mode ?? "files_with_matches") === "content";
   for (const line of lines) {
-    const colonIdx = line.indexOf(":");
-    if (colonIdx > 0) fileSet.add(line.slice(0, colonIdx));
-    else fileSet.add(line); // files_with_matches mode
+    if (!line.trim()) continue;
+    if (isContentMode) {
+      // Content mode: "file:line:text" — match rg output format
+      const match = line.match(/^(.+?):(\d+):/);
+      if (match) fileSet.add(match[1]);
+      else fileSet.add(line.split(":")[0] || line);
+    } else {
+      // files_with_matches or count mode: line is the file path
+      const colonIdx = line.indexOf(":");
+      if (colonIdx > 0) fileSet.add(line.slice(0, colonIdx));
+      else fileSet.add(line);
+    }
   }
 
   return {

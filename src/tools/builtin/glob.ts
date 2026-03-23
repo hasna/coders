@@ -111,19 +111,22 @@ export const globTool: Tool<GlobInput, GlobOutput> = {
         suppressErrors: true,
       });
 
-      // Sort by modification time (newest first)
-      const withStats = allFiles.map((f) => {
-        try {
-          const stat = statSync(f);
-          return { path: f, mtime: stat.mtimeMs };
-        } catch {
-          return { path: f, mtime: 0 };
-        }
-      });
-      withStats.sort((a, b) => b.mtime - a.mtime);
+      const truncated = allFiles.length > MAX_RESULTS;
 
-      const truncated = withStats.length > MAX_RESULTS;
-      const files = withStats.slice(0, MAX_RESULTS).map((f) => f.path);
+      // Only stat files if the result set is small enough (avoid N+1 for large results)
+      let files: string[];
+      if (allFiles.length <= MAX_RESULTS) {
+        // Small set — sort by modification time (newest first)
+        const withStats = allFiles.map((f) => {
+          try { return { path: f, mtime: statSync(f).mtimeMs }; }
+          catch { return { path: f, mtime: 0 }; }
+        });
+        withStats.sort((a, b) => b.mtime - a.mtime);
+        files = withStats.map((f) => f.path);
+      } else {
+        // Large set — skip stat, return alphabetical (truncated)
+        files = allFiles.slice(0, MAX_RESULTS);
+      }
 
       return {
         data: {
@@ -139,6 +142,7 @@ export const globTool: Tool<GlobInput, GlobOutput> = {
           totalMatches: 0,
           truncated: false,
         },
+        error: `Glob failed: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   },

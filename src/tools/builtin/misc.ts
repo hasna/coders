@@ -36,14 +36,21 @@ function simpleTool<TIn extends z.ZodType, TOut>(opts: {
     async description() { return opts.hint; },
     async prompt() { return opts.prompt; },
     get inputSchema() { return opts.inputSchema as any; },
-    get outputSchema() { return z.any() as any; },
+    get outputSchema() { return z.object({}) as any; },
     userFacingName() { return opts.name; },
     isEnabled() { return true; },
     isConcurrencySafe() { return opts.concurrent; },
     isReadOnly() { return opts.readOnly; },
     toAutoClassifierInput() { return ""; },
     async checkPermissions(input: any) { return { behavior: "allow" as const, updatedInput: input }; },
-    async validateInput() { return { result: true }; },
+    async validateInput(input: any) {
+      const result = opts.inputSchema.safeParse(input);
+      if (!result.success) {
+        const msg = result.error.issues.map((i: any) => i.message).join(", ");
+        return { result: false, message: msg, errorCode: 1 };
+      }
+      return { result: true };
+    },
     call: opts.call as any,
     mapToolResultToToolResultBlockParam: opts.mapResult as any,
   };
@@ -122,6 +129,11 @@ Query forms:
   },
 });
 
+// ── Cron job store (session-only, in-memory) ──────────────────────
+
+interface CronJob { id: string; cron: string; prompt: string; recurring: boolean; createdAt: number; }
+const cronJobs = new Map<string, CronJob>();
+
 // ── CronCreate ─────────────────────────────────────────────────────
 
 export const cronCreateTool = simpleTool({
@@ -136,10 +148,11 @@ export const cronCreateTool = simpleTool({
   prompt: "Schedule a prompt on a cron schedule. Session-only, auto-expires after 7 days.",
   async call(input) {
     const id = `cron-${Date.now().toString(36)}`;
+    cronJobs.set(id, { id, cron: input.cron, prompt: input.prompt, recurring: input.recurring, createdAt: Date.now() });
     return { data: { id, cron: input.cron, humanSchedule: input.cron, recurring: input.recurring } };
   },
   mapResult(result: any, id) {
-    return { type: "tool_result", tool_use_id: id, content: `Scheduled job ${result.id} (${result.humanSchedule})` };
+    return { type: "tool_result", tool_use_id: id, content: `Scheduled job ${result.id} (${result.humanSchedule}). ${result.recurring ? "Recurring" : "One-shot"}.` };
   },
 });
 
@@ -151,9 +164,12 @@ export const cronDeleteTool = simpleTool({
   inputSchema: z.strictObject({ id: z.string().describe("Job ID") }),
   readOnly: false, concurrent: false, defer: true,
   prompt: "Cancel a scheduled cron job by its ID.",
-  async call(input) { return { data: { id: input.id } }; },
+  async call(input) {
+    const existed = cronJobs.delete(input.id);
+    return { data: { id: input.id, deleted: existed }, error: existed ? undefined : `Job ${input.id} not found` };
+  },
   mapResult(result: any, id) {
-    return { type: "tool_result", tool_use_id: id, content: `Cancelled job ${result.id}` };
+    return { type: "tool_result", tool_use_id: id, content: result.deleted ? `Cancelled job ${result.id}` : `Job ${result.id} not found` };
   },
 });
 
@@ -165,9 +181,14 @@ export const cronListTool = simpleTool({
   inputSchema: z.strictObject({}),
   readOnly: true, concurrent: true, defer: true,
   prompt: "List all active scheduled cron jobs.",
-  async call() { return { data: { jobs: [] } }; },
+  async call() {
+    const jobs = [...cronJobs.values()].map(j => ({ id: j.id, cron: j.cron, prompt: j.prompt.slice(0, 80), recurring: j.recurring }));
+    return { data: { jobs } };
+  },
   mapResult(result: any, id) {
-    return { type: "tool_result", tool_use_id: id, content: result.jobs.length > 0 ? JSON.stringify(result.jobs) : "No scheduled jobs." };
+    if (result.jobs.length === 0) return { type: "tool_result", tool_use_id: id, content: "No scheduled jobs." };
+    const lines = result.jobs.map((j: any) => `  ${j.id}: ${j.cron} ${j.recurring ? "(recurring)" : "(one-shot)"} — ${j.prompt}`);
+    return { type: "tool_result", tool_use_id: id, content: `Active jobs (${result.jobs.length}):\n${lines.join("\n")}` };
   },
 });
 
@@ -180,7 +201,7 @@ export const enterWorktreeTool = simpleTool({
   readOnly: false, concurrent: false, defer: true,
   prompt: "Create a git worktree for isolated work. Only use when user explicitly asks for a worktree.",
   async call(input) {
-    return { data: { worktreePath: "", worktreeBranch: "", message: "Worktree creation not yet fully wired" } };
+    return { data: { worktreePath: "", worktreeBranch: "", message: "Worktree creation not yet implemented" }, error: "EnterWorktree is not yet implemented. Use `git worktree add` via Bash instead." };
   },
   mapResult(result: any, id) {
     return { type: "tool_result", tool_use_id: id, content: result.message };
@@ -199,7 +220,7 @@ export const exitWorktreeTool = simpleTool({
   readOnly: false, concurrent: false, defer: true,
   prompt: "Exit a worktree session. Use 'keep' to preserve work, 'remove' for clean exit.",
   async call(input) {
-    return { data: { action: input.action, originalCwd: process.cwd(), message: "Worktree exit not yet fully wired" } };
+    return { data: { action: input.action, originalCwd: process.cwd(), message: "Worktree exit not yet implemented" }, error: "ExitWorktree is not yet implemented. Use `git worktree remove` via Bash instead." };
   },
   mapResult(result: any, id) {
     return { type: "tool_result", tool_use_id: id, content: result.message };
@@ -255,6 +276,12 @@ All metadata, outputs, and kernel info are preserved. Cell indices are 0-based.`
     const { readFileSync, writeFileSync } = await import("fs");
     const { resolve } = await import("path");
     const notebookPath = resolve(input.notebook_path);
+
+    // Require file to be read first
+    const { hasFileBeenRead } = await import("./read.js");
+    if (!hasFileBeenRead(notebookPath)) {
+      return { data: { success: false, error: `Notebook "${input.notebook_path}" has not been read yet. Use the Read tool first.` } };
+    }
 
     try {
       const raw = readFileSync(notebookPath, "utf-8");
@@ -387,8 +414,7 @@ export const configTool = simpleTool({
   async call(input) {
     const { getSettings, saveUserSettings } = await import("../../config/loader.js");
     if (input.value !== undefined) {
-      const settings = getSettings() as Record<string, unknown>;
-      settings[input.setting] = input.value;
+      saveUserSettings({ [input.setting]: input.value });
       return { data: { operation: "set", setting: input.setting, value: input.value, success: true } };
     }
     const settings = getSettings() as Record<string, unknown>;
@@ -414,9 +440,23 @@ export const sendMessageTool = simpleTool({
   readOnly: false, concurrent: true, defer: true,
   prompt: "Send a direct message to another agent or to the user.",
   async call(input) {
+    // Emit to dashboard events so the web terminal can show messages
+    try {
+      const { dashboardEvents } = await import("../../web/events.js");
+      dashboardEvents.push("message", { to: input.to, message: input.message });
+    } catch { /* dashboard not loaded — that's fine */ }
+
+    // Try to deliver via conversations MCP if available
+    try {
+      const conversations = await import("../../integrations/conversations.js");
+      if (conversations.sendMessage) {
+        await conversations.sendMessage(input.to, input.message);
+      }
+    } catch { /* conversations not available */ }
+
     return { data: { sent: true, to: input.to, message: input.message } };
   },
   mapResult(result: any, id) {
-    return { type: "tool_result", tool_use_id: id, content: `Message sent to ${result.to}` };
+    return { type: "tool_result", tool_use_id: id, content: `Message sent to ${result.to}: "${result.message}"` };
   },
 });

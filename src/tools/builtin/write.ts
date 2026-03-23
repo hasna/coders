@@ -73,6 +73,11 @@ export const writeTool: Tool<WriteInput, WriteOutput> = {
     if (!input.file_path) {
       return { result: false, message: "file_path is required", errorCode: 1 };
     }
+    // Prevent writing excessively large files (>10MB)
+    const MAX_WRITE_SIZE = 10 * 1024 * 1024;
+    if (input.content && input.content.length > MAX_WRITE_SIZE) {
+      return { result: false, message: `Content too large (${(input.content.length / 1024 / 1024).toFixed(1)}MB > 10MB limit)`, errorCode: 2 };
+    }
     return { result: true };
   },
 
@@ -87,6 +92,14 @@ export const writeTool: Tool<WriteInput, WriteOutput> = {
     const resolved = resolvePath(input.file_path);
     const created = !existsSync(resolved);
 
+    // Existing files must be read before overwriting (prevents blind overwrites)
+    if (!created && !hasFileBeenRead(resolved)) {
+      return {
+        data: { filePath: resolved, bytesWritten: 0, created: false },
+        error: `File "${input.file_path}" has not been read yet. Use the Read tool first to review existing content before overwriting.`,
+      };
+    }
+
     // Create parent directories
     const dir = dirname(resolved);
     if (!existsSync(dir)) {
@@ -97,7 +110,7 @@ export const writeTool: Tool<WriteInput, WriteOutput> = {
     if (!created) {
       try {
         const originalContent = readFileSync(resolved, "utf-8");
-        const cpId = randomUUID().slice(0, 8);
+        const cpId = randomUUID();
         dbRun(
           "INSERT INTO checkpoints (id, session_id, file_path, original_content, edit_operation) VALUES (?, ?, ?, ?, ?)",
           [cpId, "current", resolved, originalContent, JSON.stringify({ type: "write_overwrite" })],

@@ -77,8 +77,8 @@ export const listMcpResourcesTool: Tool<ListMcpResourcesInput, ListMcpResourcesO
     return { result: true };
   },
 
-  async checkPermissions() {
-    return { behavior: "allow" };
+  async checkPermissions(input: any) {
+    return { behavior: "allow", updatedInput: input };
   },
 
   async call(_input, _context): Promise<ToolCallResult<ListMcpResourcesOutput>> {
@@ -209,8 +209,8 @@ export const readMcpResourceTool: Tool<ReadMcpResourceInput, ReadMcpResourceOutp
     return { result: true };
   },
 
-  async checkPermissions() {
-    return { behavior: "allow" };
+  async checkPermissions(input: any) {
+    return { behavior: "allow", updatedInput: input };
   },
 
   async call(input, _context): Promise<ToolCallResult<ReadMcpResourceOutput>> {
