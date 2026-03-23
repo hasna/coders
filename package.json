@@ -15,7 +15,8 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "clean": "rm -rf dist/"
+    "clean": "rm -rf dist/",
+    "postinstall": "mkdir -p $HOME/.hasna/coders 2>/dev/null || true"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -38,17 +39,18 @@
     "terminal"
   ],
   "author": "Andrei Hasna <andrei@hasna.com>",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasnaxyz/open-coders.git"
+    "url": "https://github.com/hasna/coders.git"
   },
   "publishConfig": {
-    "access": "restricted",
-    "registry": "https://registry.npmjs.org/"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
+    "@hasna/cloud": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "axios": "^1.7.0",
     "better-sqlite3": "^12.8.0",

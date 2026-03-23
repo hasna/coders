@@ -14,7 +14,9 @@
  */
 import { join } from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { homedir } from "os";
 import { getConfigDir } from "../config/paths.js";
+import { SqliteAdapter } from "@hasna/cloud";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -27,13 +29,27 @@ export interface DbRow {
 let _db: any = null;
 
 function getDbPath(): string {
-  const dir = getConfigDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  return join(dir, "coders.db");
+  // New path: ~/.hasna/coders/
+  const home = homedir();
+  const newDir = join(home, ".hasna", "coders");
+  const newPath = join(newDir, "coders.db");
+
+  // Backward compat: check old ~/.coders/ path
+  const oldDir = getConfigDir();
+  const oldPath = join(oldDir, "coders.db");
+  if (existsSync(oldPath) && !existsSync(newPath)) {
+    // Use old path if new path doesn't exist yet
+    return oldPath;
+  }
+
+  // Use new path
+  if (!existsSync(newDir)) mkdirSync(newDir, { recursive: true });
+  return newPath;
 }
 
 /**
  * Get the database instance. Creates and initializes on first call.
+ * Uses SqliteAdapter from @hasna/cloud for cloud-ready SQLite.
  */
 export function getDb(): any {
   if (_db) return _db;
@@ -41,19 +57,23 @@ export function getDb(): any {
   const dbPath = getDbPath();
 
   try {
-    // Try Bun's native sqlite first
-    const { Database } = require("bun:sqlite");
-    _db = new Database(dbPath);
+    _db = new SqliteAdapter(dbPath) as any;
   } catch {
     try {
-      // Fallback to better-sqlite3 for Node.js
-      const BetterSqlite3 = require("better-sqlite3");
-      _db = new BetterSqlite3(dbPath);
+      // Try Bun's native sqlite first
+      const { Database } = require("bun:sqlite");
+      _db = new Database(dbPath);
     } catch {
-      // Last resort: silent JSON-file storage (no user-visible output)
-      _db = createJsonFileDb();
-      initSchema(_db);
-      return _db;
+      try {
+        // Fallback to better-sqlite3 for Node.js
+        const BetterSqlite3 = require("better-sqlite3");
+        _db = new BetterSqlite3(dbPath);
+      } catch {
+        // Last resort: silent JSON-file storage (no user-visible output)
+        _db = createJsonFileDb();
+        initSchema(_db);
+        return _db;
+      }
     }
   }
 
@@ -254,6 +274,17 @@ function initSchema(db: any): void {
       duration_ms REAL,
       was_allowed INTEGER DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Feedback
+    CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      message TEXT NOT NULL,
+      email TEXT,
+      category TEXT DEFAULT 'general',
+      version TEXT,
+      machine_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
 }
