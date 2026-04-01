@@ -10,9 +10,8 @@ await build({
   outfile: "dist/cli.mjs",
   sourcemap: true,
   minify: process.env.NODE_ENV === "production",
-  banner: {
-    js: 'import { createRequire } from "module"; const require = createRequire(import.meta.url);',
-  },
+  // Removed manual createRequire banner — esbuild injects it automatically when
+  // bundling CJS dependencies into ESM. Having both causes "already declared" SyntaxError.
   external: [
     // Node built-ins
     "node:*",
@@ -67,7 +66,7 @@ await build({
 });
 
 // Create cli.js wrapper with shebang that imports the bundle
-const shebangWrapper = `#!/usr/bin/env node
+const shebangWrapper = `#!/usr/bin/env bun
 import "./cli.mjs";
 `;
 writeFileSync("dist/cli.js", shebangWrapper);
