@@ -6,9 +6,9 @@
       "name": "@hasna/coders",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.52.0",
-        "@hasna/cloud": "0.1.5",
+        "@hasna/cloud": "^0.1.24",
         "@modelcontextprotocol/sdk": "^1.12.0",
-        "axios": "^1.7.0",
+        "axios": "1.13.6",
         "better-sqlite3": "^12.8.0",
         "commander": "^13.0.0",
         "execa": "^9.5.0",
@@ -207,7 +207,7 @@
 
     "@hasna/brains": ["@hasna/brains@0.0.5", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "chalk": "^5.4.1", "commander": "^13.1.0", "drizzle-orm": "^0.40.0", "ink": "^5.2.0", "openai": "^4.0.0", "react": "^18.3.1", "zod": "^3.24.2" }, "bin": { "brains": "dist/cli/index.js", "brains-mcp": "dist/mcp/index.js", "brains-serve": "dist/server/index.js" } }, "sha512-1zLafPVb7y0XuDWrRR2KbiIXVv61eQHEXLWX9kQ+m+wt7wLwPLOddi6t8fLf7qMZ73B47tsM45pG9gc/hkl9iQ=="],
 
-    "@hasna/cloud": ["@hasna/cloud@0.1.5", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "commander": "^13.1.0", "pg": "^8.13.3", "zod": "^3.24.2" }, "bin": { "cloud": "dist/cli/index.js", "cloud-mcp": "dist/mcp/index.js" } }, "sha512-B82jy53QC7xphchffDVZc7gw9OLkcX2rMnmytTQ6FZEeHgG/ySgfM3Om07OOl72dc8ZUkqOpcK+2OYBUYkFR/A=="],
+    "@hasna/cloud": ["@hasna/cloud@0.1.30", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "commander": "^13.1.0", "pg": "^8.13.3", "zod": "^3.24.2" }, "bin": { "cloud": "dist/cli/index.js", "cloud-mcp": "dist/mcp/index.js" } }, "sha512-qpDiJNsU/K1cFDk1l+xUA1xEEq8+Q37OdAz/ec0LwrQiA1HyWukzR8Lh7igkOqBT2foa46cxhB7yGnfiT2cWrA=="],
 
     "@hasna/configs": ["@hasna/configs@0.2.24", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "chalk": "^5.4.1", "commander": "^13.1.0", "hono": "^4.7.4", "ink": "^5.2.0", "react": "^18.3.1", "zod": "^3.24.2" }, "bin": { "configs": "dist/cli/index.js", "configs-mcp": "dist/mcp/index.js", "configs-serve": "dist/server/index.js" } }, "sha512-hCzkwsJ0z81CiZseYRXj/7HvwsxEj5VnIvyrwtpi7PZEUCSqBeB5DgrM8NqydWKvAftnhEcua+Y/X3+mAEKCig=="],
 
