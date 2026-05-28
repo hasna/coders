@@ -73,7 +73,7 @@ await build({
 writeFileSync("dist/cli.js", `#!/usr/bin/env bun
 import "./cli.mjs";
 `);
-writeFileSync("dist/coders-mcp.js", `#!/usr/bin/env node
+writeFileSync("dist/coders-mcp.js", `#!/usr/bin/env bun
 import "./coders-mcp.mjs";
 `);
 chmodSync("dist/cli.js", 0o755);
