@@ -1,10 +1,14 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { buildServer } from "./server.js";
 
 export const DEFAULT_MCP_HTTP_PORT = 8805;
 export const MCP_SERVICE_NAME = "coders";
+
+async function defaultBuildServer(): Promise<Server> {
+  const { buildServer } = await import("./server.js");
+  return buildServer();
+}
 
 export function resolveMcpHttpPort(explicit?: number): number {
   if (explicit != null && !Number.isNaN(explicit)) return explicit;
@@ -41,7 +45,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 export async function handleStatelessMcpNode(
   req: IncomingMessage,
   res: ServerResponse,
-  getServer: () => Server | Promise<Server> = buildServer,
+  getServer: () => Server | Promise<Server> = defaultBuildServer,
 ): Promise<void> {
   const server = await getServer();
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -65,7 +69,7 @@ export async function startMcpHttpServer(options: {
 } = {}): Promise<{ port: number; close: () => Promise<void> }> {
   const port = options.port ?? resolveMcpHttpPort();
   const host = "127.0.0.1";
-  const getServer = options.getServer ?? buildServer;
+  const getServer = options.getServer ?? defaultBuildServer;
   const name = options.name ?? MCP_SERVICE_NAME;
 
   const httpServer = createServer(async (req, res) => {

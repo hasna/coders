@@ -1,13 +1,14 @@
-#!/usr/bin/env node
-import { parseHttpArgv, resolveMcpHttpPort, runMcpHttpServer } from "./http.js";
-import { runMcpServer } from "./server.js";
+#!/usr/bin/env bun
+import { parseHttpArgv, resolveMcpHttpPort } from "./http.js";
 
 async function main() {
   const { http, port } = parseHttpArgv();
   if (http) {
+    const { runMcpHttpServer } = await import("./http.js");
     await runMcpHttpServer({ port: resolveMcpHttpPort(port) });
     return;
   }
+  const { runMcpServer } = await import("./server.js");
   await runMcpServer();
 }
 
