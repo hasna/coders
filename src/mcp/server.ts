@@ -166,6 +166,8 @@ export async function createMcpServer(options: McpServerOptions = {}): Promise<S
   return server;
 }
 
+export const buildServer = createMcpServer;
+
 // ── Run server on stdio ────────────────────────────────────────────
 
 export async function runMcpServer(options: McpServerOptions = {}): Promise<void> {

@@ -194,7 +194,14 @@ export async function main(): Promise<void> {
     .description("Start the Coders MCP server")
     .option("-d, --debug", "Enable debug mode")
     .option("--verbose", "Override verbose mode")
-    .action(async ({ debug, verbose }) => {
+    .option("--http", "Use Streamable HTTP transport on 127.0.0.1")
+    .option("--port <port>", "HTTP port (default 8805 or MCP_HTTP_PORT)")
+    .action(async ({ debug, verbose, http, port }) => {
+      if (http || process.env.MCP_HTTP === "1") {
+        const { resolveMcpHttpPort, runMcpHttpServer } = await import("../mcp/http.js");
+        await runMcpHttpServer({ port: resolveMcpHttpPort(port ? parseInt(port, 10) : undefined) });
+        return;
+      }
       const { runMcpServer } = await import("../mcp/server.js");
       await runMcpServer({ debug, verbose });
     });

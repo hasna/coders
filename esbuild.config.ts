@@ -1,19 +1,14 @@
 import { build } from "esbuild";
-import { writeFileSync, readFileSync, chmodSync } from "fs";
+import { writeFileSync, chmodSync } from "fs";
 
-await build({
-  entryPoints: ["src/cli/index.ts"],
+const shared = {
   bundle: true,
-  platform: "node",
+  platform: "node" as const,
   target: "node18",
-  format: "esm",
-  outfile: "dist/cli.mjs",
+  format: "esm" as const,
   sourcemap: true,
   minify: process.env.NODE_ENV === "production",
-  // Removed manual createRequire banner — esbuild injects it automatically when
-  // bundling CJS dependencies into ESM. Having both causes "already declared" SyntaxError.
   external: [
-    // Node built-ins
     "node:*",
     "fs",
     "path",
@@ -36,13 +31,11 @@ await build({
     "string_decoder",
     "tty",
     "worker_threads",
-    // Native modules that can't be bundled
     "better-sqlite3",
     "sharp",
     "tree-sitter",
     "yoga-wasm-web",
     "bun:sqlite",
-    // Optional @hasna/* packages — resolved at runtime
     "@hasna/todos",
     "@hasna/conversations",
     "@hasna/connectors",
@@ -62,13 +55,28 @@ await build({
     "process.env.CODERS_VERSION": '"0.1.2"',
     "process.env.CODERS_BUILD_TIME": `"${new Date().toISOString()}"`,
   },
-  logLevel: "info",
+  logLevel: "info" as const,
+};
+
+await build({
+  ...shared,
+  entryPoints: ["src/cli/index.ts"],
+  outfile: "dist/cli.mjs",
 });
 
-// Create cli.js wrapper with shebang that imports the bundle
-const shebangWrapper = `#!/usr/bin/env bun
+await build({
+  ...shared,
+  entryPoints: ["src/mcp/bin.ts"],
+  outfile: "dist/coders-mcp.mjs",
+});
+
+writeFileSync("dist/cli.js", `#!/usr/bin/env bun
 import "./cli.mjs";
-`;
-writeFileSync("dist/cli.js", shebangWrapper);
+`);
+writeFileSync("dist/coders-mcp.js", `#!/usr/bin/env node
+import "./coders-mcp.mjs";
+`);
 chmodSync("dist/cli.js", 0o755);
 chmodSync("dist/cli.mjs", 0o644);
+chmodSync("dist/coders-mcp.js", 0o755);
+chmodSync("dist/coders-mcp.mjs", 0o644);

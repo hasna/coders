@@ -3,6 +3,7 @@
  */
 export {
   createMcpServer,
+  buildServer,
   runMcpServer,
   type McpServerOptions,
 } from "./server.js";

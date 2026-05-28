@@ -1,10 +1,11 @@
 {
   "name": "@hasna/coders",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Open-source coding agent CLI with native @hasna/* ecosystem integration",
   "type": "module",
   "bin": {
-    "coders": "./dist/cli.js"
+    "coders": "./dist/cli.js",
+    "coders-mcp": "./dist/coders-mcp.js"
   },
   "scripts": {
     "build": "tsx esbuild.config.ts",
@@ -25,6 +26,9 @@
     "dist/cli.js",
     "dist/cli.mjs",
     "dist/cli.mjs.map",
+    "dist/coders-mcp.js",
+    "dist/coders-mcp.mjs",
+    "dist/coders-mcp.mjs.map",
     "vendor/",
     "LICENSE",
     "README.md"
