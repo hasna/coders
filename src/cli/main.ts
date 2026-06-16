@@ -6,6 +6,7 @@
  * and the preAction hook that initializes configs/auth/plugins.
  */
 import { Command, Option } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import { VERSION, BUILD_TIME, PACKAGE_NAME, profileCheckpoint } from "./index.js";
 import { resolveOptions } from "./args.js";
 import { setProjectRoot, getSettings, getUserSettings, getProjectSettings, saveUserSettings, getConfig, saveConfig } from "../config/loader.js";
@@ -1105,6 +1106,7 @@ export async function main(): Promise<void> {
   // ── Parse ────────────────────────────────────────────────────────
 
   profileCheckpoint("run_before_parse");
+  registerEventsCommands(program, { source: "coders" });
   await program.parseAsync(process.argv);
   profileCheckpoint("run_after_parse");
 }

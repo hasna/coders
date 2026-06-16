@@ -1,6 +1,6 @@
 {
   "name": "@hasna/coders",
-  "version": "0.2.6",
+  "version": "0.2.8",
   "description": "Open-source coding agent CLI with native @hasna/* ecosystem integration",
   "type": "module",
   "bin": {
@@ -54,7 +54,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
-    "@hasna/cloud": "^0.1.24",
+    "@hasna/cloud": "0.1.24",
+    "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "axios": "1.13.6",
     "better-sqlite3": "^12.8.0",
