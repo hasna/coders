@@ -161,9 +161,13 @@ const GIT_READ_ONLY_SUBCOMMANDS = new Set([
 
 const NPM_READ_ONLY_SUBCOMMANDS = new Set([
   "ls", "list", "info", "view", "show", "search",
-  "outdated", "audit", "config", "whoami", "token",
+  "outdated", "audit", "whoami",
   "help", "explain", "why", "fund", "bugs", "repo",
 ]);
+
+const PACKAGE_MANAGER_CONFIG_READ_ONLY_SUBCOMMANDS = new Set(["get"]);
+const PACKAGE_MANAGER_SENSITIVE_CONFIG_KEY = /(?:auth|token|password|passwd|secret|credential|key|cert|otp)/i;
+const PACKAGE_MANAGER_SAFE_CONFIG_KEY = /^[A-Za-z0-9_@./:-]+$/;
 
 const DOCKER_READ_ONLY_SUBCOMMANDS = new Set([
   "ps", "images", "logs", "inspect", "stats", "top",
@@ -258,8 +262,7 @@ function isReadOnlyPart(part: string): boolean {
       return subCmd ? GIT_READ_ONLY_SUBCOMMANDS.has(subCmd) : false;
     }
     if (baseCmd === "npm" || baseCmd === "yarn" || baseCmd === "pnpm" || baseCmd === "bun") {
-      const subCmd = tokens[1];
-      return subCmd ? NPM_READ_ONLY_SUBCOMMANDS.has(subCmd) : false;
+      return isReadOnlyPackageManagerCommand(tokens);
     }
     if (baseCmd === "docker" || baseCmd === "kubectl") {
       const subCmd = tokens[1];
@@ -303,6 +306,28 @@ function isReadOnlyPart(part: string): boolean {
   }
 
   return false;
+}
+
+function isReadOnlyPackageManagerCommand(tokens: string[]): boolean {
+  const subCmd = tokens[1];
+  if (!subCmd) return false;
+
+  if (subCmd === "config") {
+    const configSubCmd = tokens[2];
+    if (!configSubCmd || !PACKAGE_MANAGER_CONFIG_READ_ONLY_SUBCOMMANDS.has(configSubCmd)) return false;
+    const configKeys = tokens.slice(3).filter((token) => !token.startsWith("-"));
+    return configKeys.length > 0 && configKeys.every((token) =>
+      PACKAGE_MANAGER_SAFE_CONFIG_KEY.test(token) &&
+      !hasShellExpansion(token) &&
+      !PACKAGE_MANAGER_SENSITIVE_CONFIG_KEY.test(token)
+    );
+  }
+
+  if (subCmd === "token") {
+    return false;
+  }
+
+  return NPM_READ_ONLY_SUBCOMMANDS.has(subCmd);
 }
 
 function normalizeShellToken(token: string): string {

@@ -29,6 +29,50 @@ describe("bash tool", () => {
     expect(result.result).toBe(true);
   });
 
+  it("auto-allows non-sensitive package manager config reads", async () => {
+    const ctx = {
+      abortController: new AbortController(),
+      getAppState: () => ({ toolPermissionContext: { mode: "default" as const, allowRules: [], denyRules: [] }, verbose: false }),
+      setAppState: () => {},
+      options: {} as any,
+    };
+    const result = await bashTool.checkPermissions({ command: "npm config get registry" }, ctx);
+    expect(result.behavior).toBe("allow");
+  });
+
+  it("does not auto-allow package manager credential reads", async () => {
+    const ctx = {
+      abortController: new AbortController(),
+      getAppState: () => ({ toolPermissionContext: { mode: "default" as const, allowRules: [], denyRules: [] }, verbose: false }),
+      setAppState: () => {},
+      options: {} as any,
+    };
+    const result = await bashTool.checkPermissions({ command: "npm config get //registry.npmjs.org/:_authToken" }, ctx);
+    expect(result.behavior).toBe("passthrough");
+  });
+
+  it("does not auto-allow package manager credential reads via shell expansion", async () => {
+    const ctx = {
+      abortController: new AbortController(),
+      getAppState: () => ({ toolPermissionContext: { mode: "default" as const, allowRules: [], denyRules: [] }, verbose: false }),
+      setAppState: () => {},
+      options: {} as any,
+    };
+    const result = await bashTool.checkPermissions({ command: "npm config get _au${x:-th}To${y:-k}en" }, ctx);
+    expect(result.behavior).toBe("passthrough");
+  });
+
+  it("does not auto-allow package manager credential reads via brace expansion", async () => {
+    const ctx = {
+      abortController: new AbortController(),
+      getAppState: () => ({ toolPermissionContext: { mode: "default" as const, allowRules: [], denyRules: [] }, verbose: false }),
+      setAppState: () => {},
+      options: {} as any,
+    };
+    const result = await bashTool.checkPermissions({ command: "npm config get _au{th,}To{ken,}" }, ctx);
+    expect(result.behavior).toBe("passthrough");
+  });
+
   it("executes simple command", async () => {
     const ctx = {
       abortController: new AbortController(),
@@ -112,7 +156,23 @@ describe("isReadOnlyCommand", () => {
   // npm read-only
   it("detects npm ls as read-only", () => expect(isReadOnlyCommand("npm ls")).toBe(true));
   it("detects npm info as read-only", () => expect(isReadOnlyCommand("npm info react")).toBe(true));
+  it("detects npm config get as read-only", () => expect(isReadOnlyCommand("npm config get registry")).toBe(true));
   it("detects npm install as NOT read-only", () => expect(isReadOnlyCommand("npm install")).toBe(false));
+  it("detects npm config get auth token as NOT read-only", () => expect(isReadOnlyCommand("npm config get //registry.npmjs.org/:_authToken")).toBe(false));
+  it("detects npm config get secret key as NOT read-only", () => expect(isReadOnlyCommand("npm config get _authToken")).toBe(false));
+  it("detects npm config get shell-expanded secret key as NOT read-only", () => expect(isReadOnlyCommand("npm config get _au${x:-th}To${y:-k}en")).toBe(false));
+  it("detects npm config get brace-expanded secret key as NOT read-only", () => expect(isReadOnlyCommand("npm config get _au{th,}To{ken,}")).toBe(false));
+  it("detects npm config get glob-expanded secret key as NOT read-only", () => expect(isReadOnlyCommand("npm config get _auth*")).toBe(false));
+  it("detects yarn config get auth token as NOT read-only", () => expect(isReadOnlyCommand("yarn config get npmAuthToken")).toBe(false));
+  it("detects pnpm config get auth token as NOT read-only", () => expect(isReadOnlyCommand("pnpm config get //registry.npmjs.org/:_authToken")).toBe(false));
+  it("detects npm config list as NOT read-only", () => expect(isReadOnlyCommand("npm config list --json")).toBe(false));
+  it("detects npm config set as NOT read-only", () => expect(isReadOnlyCommand("npm config set registry https://example.invalid")).toBe(false));
+  it("detects npm config delete as NOT read-only", () => expect(isReadOnlyCommand("npm config delete registry")).toBe(false));
+  it("detects npm config edit as NOT read-only", () => expect(isReadOnlyCommand("npm config edit")).toBe(false));
+  it("detects npm token list as NOT read-only", () => expect(isReadOnlyCommand("npm token list")).toBe(false));
+  it("detects npm token revoke as NOT read-only", () => expect(isReadOnlyCommand("npm token revoke token-id")).toBe(false));
+  it("detects yarn config set as NOT read-only", () => expect(isReadOnlyCommand("yarn config set npmRegistryServer https://example.invalid")).toBe(false));
+  it("detects pnpm config delete as NOT read-only", () => expect(isReadOnlyCommand("pnpm config delete registry")).toBe(false));
 
   // curl mutating/output flags
   it("detects plain curl as NOT read-only", () => expect(isReadOnlyCommand("curl https://example.invalid")).toBe(false));

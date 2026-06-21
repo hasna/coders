@@ -1,6 +1,6 @@
 {
   "name": "@hasna/coders",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "description": "Open-source coding agent CLI with native @hasna/* ecosystem integration",
   "type": "module",
   "bin": {
