@@ -1,6 +1,19 @@
 /**
  * Core constants — tool names, config paths, defaults
  */
+import { readFileSync } from "fs";
+
+function readPackageVersion(): string {
+  try {
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf-8"),
+    ) as { version?: unknown };
+    if (typeof packageJson.version === "string") return packageJson.version;
+  } catch {
+    // Bundled builds inject CODERS_VERSION; source runs fall back to 0.0.0.
+  }
+  return "0.0.0";
+}
 
 // Tool names (matching Claude Code's tool name constants)
 export const BASH_TOOL = "Bash" as const;
@@ -97,5 +110,5 @@ export const BETA_HEADERS = [
 export const TELEMETRY_PREFIX = "coders_";
 
 // Version info
-export const VERSION = process.env.CODERS_VERSION ?? "0.0.1";
+export const VERSION = process.env.CODERS_VERSION ?? readPackageVersion();
 export const BUILD_TIME = process.env.CODERS_BUILD_TIME ?? new Date().toISOString();

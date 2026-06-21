@@ -459,6 +459,16 @@ interface ToolHandlerSplit {
   deferredSchemas: Map<string, { name: string; description: string; inputSchema: Record<string, unknown> }>;
 }
 
+type ReadOnlyPermissionShape = {
+  isReadOnly: boolean | (() => boolean);
+};
+
+export function isPermissionHandlerReadOnly(handler: ReadOnlyPermissionShape | undefined): boolean {
+  if (!handler) return false;
+  const value = handler.isReadOnly;
+  return typeof value === "function" ? value.call(handler) : value === true;
+}
+
 function createToolHandlers(mcpHandlers?: ToolHandler[]): ToolHandlerSplit {
   const tools = [
     bashTool, readTool, editTool, writeTool, globTool, grepTool,
@@ -1508,7 +1518,7 @@ function App({ model: initialModel, mode: initialMode, dangerouslySkipPermission
             // Plan mode: only allow read-only tools
             if (mode === "plan") {
               const handler = toolHandlers.find(t => t.name === toolName);
-              if (handler && !handler.isReadOnly) {
+              if (handler && !isPermissionHandlerReadOnly(handler)) {
                 return { behavior: "deny", message: `Plan mode: ${toolName} is not read-only. Use /plan off to exit plan mode.` };
               }
               return { behavior: "allow" };
@@ -1527,7 +1537,7 @@ function App({ model: initialModel, mode: initialMode, dangerouslySkipPermission
 
             // Read-only tools: auto-allow without prompting
             const handler = toolHandlers.find(t => t.name === toolName);
-            if (handler?.isReadOnly) {
+            if (isPermissionHandlerReadOnly(handler)) {
               return { behavior: "allow" };
             }
 

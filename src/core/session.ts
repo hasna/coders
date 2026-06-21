@@ -169,6 +169,7 @@ export function saveSession(session: Session): void {
     `UPDATE sessions SET metadata = ?, updated_at = ? WHERE id = ?`,
     [JSON.stringify(session.metadata), session.updatedAt, session.id],
   );
+  persistMissingSessionMessages(session);
 }
 
 export function loadSession(sessionId: string): Session | null {
@@ -223,6 +224,7 @@ export function addMessage(sessionId: string, role: string, content: string, ext
 }
 
 export function updateSession(session: Session, _messages: Message[], metadata?: Partial<SessionMetadata>): void {
+  session.messages = _messages;
   session.metadata.completedTurns++;
   session.metadata.lastInteractionTime = new Date().toISOString();
   if (metadata) Object.assign(session.metadata, metadata);
@@ -236,6 +238,34 @@ let _sessionStartTime: number = Date.now();
 export function getCurrentSessionId(): string | null { return _currentSessionId; }
 export function setCurrentSessionId(id: string): void { _currentSessionId = id; _sessionStartTime = Date.now(); }
 export function getSessionStartTime(): number { return _sessionStartTime; }
+export function resetSessionStateForTests(): void {
+  _deviceId = null;
+  _currentSessionId = null;
+  _sessionStartTime = Date.now();
+}
+
+function persistMissingSessionMessages(session: Session): void {
+  if (session.messages.length === 0) return;
+
+  const existing = dbAll<{ role: string; content: string }>(
+    "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id",
+    [session.id],
+  );
+  if (existing.length >= session.messages.length) return;
+
+  const serialized = session.messages.map((message) => ({
+    role: message.role,
+    content: typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+  }));
+  const existingIsPrefix = existing.every((row, index) => (
+    row.role === serialized[index]?.role && row.content === serialized[index]?.content
+  ));
+  if (!existingIsPrefix) return;
+
+  for (const message of serialized.slice(existing.length)) {
+    addMessage(session.id, message.role, message.content);
+  }
+}
 
 // Ensure session is saved on unexpected exit
 let _crashHandlerInstalled = false;

@@ -17,7 +17,7 @@ describe("ContextManager", () => {
   it("creates with correct window size", () => {
     const cm = new ContextManager({ model: "sonnet" });
     const state = cm.getState([]);
-    expect(state.contextWindowSize).toBe(200_000);
+    expect(state.contextWindowSize).toBe(1_000_000);
     expect(state.estimatedTokens).toBe(0);
     expect(state.utilization).toBe(0);
     expect(state.needsCompaction).toBe(false);
@@ -121,7 +121,7 @@ describe("ContextManager", () => {
 
   it("setModel updates context window", () => {
     const cm = new ContextManager({ model: "sonnet" });
-    expect(cm.getState([]).contextWindowSize).toBe(200_000);
+    expect(cm.getState([]).contextWindowSize).toBe(1_000_000);
 
     cm.setModel("opus[1m]");
     expect(cm.getState([]).contextWindowSize).toBe(1_000_000);

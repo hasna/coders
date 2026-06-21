@@ -78,6 +78,14 @@ export const writeTool: Tool<WriteInput, WriteOutput> = {
     if (input.content && input.content.length > MAX_WRITE_SIZE) {
       return { result: false, message: `Content too large (${(input.content.length / 1024 / 1024).toFixed(1)}MB > 10MB limit)`, errorCode: 2 };
     }
+    const resolved = resolvePath(input.file_path);
+    if (existsSync(resolved) && !hasFileBeenRead(resolved)) {
+      return {
+        result: false,
+        message: `File "${input.file_path}" exists. Read it first before overwriting.`,
+        errorCode: 3,
+      };
+    }
     return { result: true };
   },
 

@@ -1,7 +1,7 @@
 /**
  * SQLite database layer — single DB for all app storage
  *
- * Uses Bun's native bun:sqlite for zero-dependency SQLite.
+ * Uses Bun's native bun:sqlite when running under Bun.
  * Falls back to better-sqlite3 for Node.js compatibility.
  *
  * DB location: ~/.coders/coders.db
@@ -12,11 +12,13 @@
  *   tasks, config, memories, teams, team_messages,
  *   permissions, mcp_servers, metrics
  */
-import { join } from "path";
+import { createRequire } from "module";
+import { join, resolve } from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { getConfigDir } from "../config/paths.js";
-import { SqliteAdapter } from "@hasna/cloud";
+
+const require = createRequire(import.meta.url);
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -29,6 +31,19 @@ export interface DbRow {
 let _db: any = null;
 
 function getDbPath(): string {
+  const dataDirOverride = process.env.CODERS_DATA_DIR;
+  if (dataDirOverride) {
+    const dir = resolve(dataDirOverride);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    return join(dir, "coders.db");
+  }
+
+  if (process.env.CODERS_CONFIG_DIR) {
+    const dir = getConfigDir();
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    return join(dir, "coders.db");
+  }
+
   // New path: ~/.hasna/coders/
   const home = homedir();
   const newDir = join(home, ".hasna", "coders");
@@ -47,9 +62,22 @@ function getDbPath(): string {
   return newPath;
 }
 
+export function getDbFallbackPath(): string {
+  const dataDirOverride = process.env.CODERS_DATA_DIR;
+  if (dataDirOverride) {
+    const dir = resolve(dataDirOverride);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    return join(dir, "coders-fallback.json");
+  }
+
+  const dir = getConfigDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return join(dir, "coders-fallback.json");
+}
+
 /**
  * Get the database instance. Creates and initializes on first call.
- * Uses SqliteAdapter from @hasna/cloud for cloud-ready SQLite.
+ * Keeps runtime-specific SQLite imports lazy so Node can import this module.
  */
 export function getDb(): any {
   if (_db) return _db;
@@ -57,23 +85,22 @@ export function getDb(): any {
   const dbPath = getDbPath();
 
   try {
-    _db = new SqliteAdapter(dbPath) as any;
-  } catch {
-    try {
-      // Try Bun's native sqlite first
+    if (process.versions.bun) {
       const { Database } = require("bun:sqlite");
       _db = new Database(dbPath);
+    } else {
+      const BetterSqlite3 = require("better-sqlite3");
+      _db = new BetterSqlite3(dbPath);
+    }
+  } catch {
+    try {
+      const BetterSqlite3 = require("better-sqlite3");
+      _db = new BetterSqlite3(dbPath);
     } catch {
-      try {
-        // Fallback to better-sqlite3 for Node.js
-        const BetterSqlite3 = require("better-sqlite3");
-        _db = new BetterSqlite3(dbPath);
-      } catch {
-        // Last resort: silent JSON-file storage (no user-visible output)
-        _db = createJsonFileDb();
-        initSchema(_db);
-        return _db;
-      }
+      // Last resort: silent JSON-file storage (no user-visible output)
+      _db = createJsonFileDb();
+      initSchema(_db);
+      return _db;
     }
   }
 
@@ -359,7 +386,7 @@ interface JsonStore {
 }
 
 function createJsonFileDb(): any {
-  const storePath = join(getConfigDir(), "coders-fallback.json");
+  const storePath = getDbFallbackPath();
   let store: JsonStore = { tables: {}, autoInc: {} };
 
   // Load existing data from disk
@@ -372,19 +399,26 @@ function createJsonFileDb(): any {
   } catch { /* corrupt file — start fresh */ }
 
   let _flushTimer: ReturnType<typeof setTimeout> | null = null;
+  function writeStore(): void {
+    try { writeFileSync(storePath, JSON.stringify(store), "utf-8"); } catch { /* silent */ }
+  }
+
   function flush(): void {
     // Debounce: batch rapid writes into a single disk flush (100ms)
     if (_flushTimer) return;
     _flushTimer = setTimeout(() => {
       _flushTimer = null;
-      try { writeFileSync(storePath, JSON.stringify(store), "utf-8"); } catch { /* silent */ }
+      writeStore();
     }, 100);
   }
-  // Ensure final flush on exit
-  process.once("beforeExit", () => {
+
+  function flushNow(): void {
     if (_flushTimer) { clearTimeout(_flushTimer); _flushTimer = null; }
-    try { writeFileSync(storePath, JSON.stringify(store), "utf-8"); } catch { /* silent */ }
-  });
+    writeStore();
+  }
+
+  // Ensure final flush on exit
+  process.once("beforeExit", flushNow);
 
   function ensureTable(name: string): void {
     if (!store.tables[name]) {
@@ -587,7 +621,7 @@ function createJsonFileDb(): any {
     },
 
     close() {
-      flush();
+      flushNow();
     },
   };
 }

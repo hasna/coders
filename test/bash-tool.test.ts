@@ -114,6 +114,34 @@ describe("isReadOnlyCommand", () => {
   it("detects npm info as read-only", () => expect(isReadOnlyCommand("npm info react")).toBe(true));
   it("detects npm install as NOT read-only", () => expect(isReadOnlyCommand("npm install")).toBe(false));
 
+  // curl mutating/output flags
+  it("detects plain curl as NOT read-only", () => expect(isReadOnlyCommand("curl https://example.invalid")).toBe(false));
+  it("detects env-wrapped curl as NOT read-only", () => expect(isReadOnlyCommand("env curl https://example.invalid")).toBe(false));
+  it("detects command-wrapped curl as NOT read-only", () => expect(isReadOnlyCommand("command curl https://example.invalid")).toBe(false));
+  it("detects curl -o joined output as NOT read-only", () => expect(isReadOnlyCommand("curl -o/tmp/out file:///etc/hosts")).toBe(false));
+  it("detects curl --output value as NOT read-only", () => expect(isReadOnlyCommand("curl --output /tmp/out file:///etc/hosts")).toBe(false));
+  it("detects curl --output=value as NOT read-only", () => expect(isReadOnlyCommand("curl --output=/tmp/out file:///etc/hosts")).toBe(false));
+  it("detects curl -d joined data as NOT read-only", () => expect(isReadOnlyCommand("curl -dsecret=1 https://example.invalid")).toBe(false));
+  it("detects curl --data=value as NOT read-only", () => expect(isReadOnlyCommand("curl --data=secret=1 https://example.invalid")).toBe(false));
+  it("detects curl -X joined method as NOT read-only", () => expect(isReadOnlyCommand("curl -XPOST https://example.invalid")).toBe(false));
+  it("detects curl --request=value as NOT read-only", () => expect(isReadOnlyCommand("curl --request=POST https://example.invalid")).toBe(false));
+  it("detects curl --upload-file=value as NOT read-only", () => expect(isReadOnlyCommand("curl --upload-file=/etc/hosts https://example.invalid")).toBe(false));
+  it("detects bundled curl short output flag as NOT read-only", () => expect(isReadOnlyCommand("curl -sSo/tmp/out file:///etc/hosts")).toBe(false));
+  it("detects bundled curl short method flag as NOT read-only", () => expect(isReadOnlyCommand("curl -sXPOST https://example.invalid")).toBe(false));
+  it("detects bundled curl short data flag as NOT read-only", () => expect(isReadOnlyCommand("curl -sdsecret=1 https://example.invalid")).toBe(false));
+  it("detects abbreviated curl upload flag as NOT read-only", () => expect(isReadOnlyCommand("curl --up /etc/hosts file:///tmp/coders-upload")).toBe(false));
+  it("detects curl config file as NOT read-only", () => expect(isReadOnlyCommand("curl -K/tmp/curl.conf")).toBe(false));
+  it("detects curl --config as NOT read-only", () => expect(isReadOnlyCommand("curl --config /tmp/curl.conf")).toBe(false));
+  it("detects curl cookie jar output as NOT read-only", () => expect(isReadOnlyCommand("curl -c/tmp/cookies file:///etc/hosts")).toBe(false));
+  it("detects curl dump-header output as NOT read-only", () => expect(isReadOnlyCommand("curl -D/tmp/headers file:///etc/hosts")).toBe(false));
+  it("detects curl trace output as NOT read-only", () => expect(isReadOnlyCommand("curl --trace /tmp/trace file:///etc/hosts")).toBe(false));
+
+  // find can execute commands or write output files
+  it("detects find -exec as NOT read-only", () => expect(isReadOnlyCommand("find . -maxdepth 0 -exec curl https://example.invalid \\;")).toBe(false));
+  it("detects find -execdir as NOT read-only", () => expect(isReadOnlyCommand("find . -execdir touch {} \\;")).toBe(false));
+  it("detects find -delete as NOT read-only", () => expect(isReadOnlyCommand("find . -delete")).toBe(false));
+  it("detects find -fprint as NOT read-only", () => expect(isReadOnlyCommand("find . -fprint /tmp/out")).toBe(false));
+
   // Dangerous commands
   it("detects rm as NOT read-only", () => expect(isReadOnlyCommand("rm -rf /")).toBe(false));
   it("detects mkdir as NOT read-only", () => expect(isReadOnlyCommand("mkdir foo")).toBe(false));
@@ -127,6 +155,12 @@ describe("isReadOnlyCommand", () => {
   // Chained with &&
   it("detects chain of read-only commands", () => expect(isReadOnlyCommand("git status && git diff")).toBe(true));
   it("detects chain with write command", () => expect(isReadOnlyCommand("git status && git push")).toBe(false));
+  it("detects background chain with write command", () => expect(isReadOnlyCommand("ls & touch /tmp/coders-bg-repro")).toBe(false));
+  it("detects newline chain with write command", () => expect(isReadOnlyCommand("ls\ntouch /tmp/coders-nl-repro")).toBe(false));
+  it("detects hash command remapping as NOT read-only", () => expect(isReadOnlyCommand("hash -p /usr/bin/curl ls; ls https://example.invalid")).toBe(false));
+  it("detects leading env assignment as NOT read-only", () => expect(isReadOnlyCommand("FOO=bar ls")).toBe(false));
+  it("detects git external diff env override as NOT read-only", () => expect(isReadOnlyCommand("GIT_EXTERNAL_DIFF=/usr/bin/curl git diff")).toBe(false));
+  it("detects pager env override as NOT read-only", () => expect(isReadOnlyCommand("PAGER=/usr/bin/curl git log -1")).toBe(false));
 
   // Empty
   it("detects empty command as NOT read-only", () => expect(isReadOnlyCommand("")).toBe(false));
@@ -134,4 +168,51 @@ describe("isReadOnlyCommand", () => {
   // Read-only keywords
   it("detects 'terraform plan' via keyword", () => expect(isReadOnlyCommand("terraform plan")).toBe(true));
   it("detects 'helm list' via keyword", () => expect(isReadOnlyCommand("helm list")).toBe(true));
+  it("detects terraform state list as read-only", () => expect(isReadOnlyCommand("terraform state list")).toBe(true));
+  it("detects terraform providers as read-only", () => expect(isReadOnlyCommand("terraform providers")).toBe(true));
+  it("detects terraform providers schema as read-only", () => expect(isReadOnlyCommand("terraform providers schema")).toBe(true));
+  it("detects helm repo list as read-only", () => expect(isReadOnlyCommand("helm repo list")).toBe(true));
+  it("detects terraform output as NOT read-only", () => expect(isReadOnlyCommand("terraform output -json")).toBe(false));
+  it("detects raw terraform output as NOT read-only", () => expect(isReadOnlyCommand("terraform output -raw db_password")).toBe(false));
+  it("detects terraform show as NOT read-only", () => expect(isReadOnlyCommand("terraform show")).toBe(false));
+  it("detects terraform state pull as NOT read-only", () => expect(isReadOnlyCommand("terraform state pull")).toBe(false));
+  it("detects terraform state show as NOT read-only", () => expect(isReadOnlyCommand("terraform state show aws_instance.x")).toBe(false));
+  it("detects helm get manifest as NOT read-only", () => expect(isReadOnlyCommand("helm get manifest prod")).toBe(false));
+  it("detects helm get values as NOT read-only", () => expect(isReadOnlyCommand("helm get values prod --all")).toBe(false));
+  it("detects helm get all as NOT read-only", () => expect(isReadOnlyCommand("helm get all prod")).toBe(false));
+  it("detects terraform fmt as NOT read-only", () => expect(isReadOnlyCommand("terraform fmt")).toBe(false));
+  it("detects terraform plan -out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan -out=tfplan")).toBe(false));
+  it("detects quoted terraform plan -out as NOT read-only", () => expect(isReadOnlyCommand('terraform plan "-out=tfplan"')).toBe(false));
+  it("detects single-quoted terraform plan -out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan '-out=tfplan'")).toBe(false));
+  it("detects escaped terraform plan -out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan -out\\=tfplan")).toBe(false));
+  it("detects backslash-escaped terraform plan -out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan \\-out=tfplan")).toBe(false));
+  it("detects double-dash terraform plan --out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan --out=tfplan")).toBe(false));
+  it("detects double-dash terraform plan --out with separate value as NOT read-only", () => expect(isReadOnlyCommand("terraform plan --out tfplan")).toBe(false));
+  it("detects quote-spliced terraform plan -out as NOT read-only", () => expect(isReadOnlyCommand('terraform plan -o""ut=tfplan')).toBe(false));
+  it("detects ANSI-C quoted terraform plan -out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan $'-out' tfplan")).toBe(false));
+  it("detects shell-expanded terraform plan -out separator as NOT read-only", () => expect(isReadOnlyCommand("terraform plan -out${IFS}tfplan")).toBe(false));
+  it("detects shell-expanded terraform plan -out equals as NOT read-only", () => expect(isReadOnlyCommand("terraform plan -out$'='tfplan")).toBe(false));
+  it("detects terraform plan -generate-config-out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan -generate-config-out=generated.tf")).toBe(false));
+  it("detects quoted terraform plan -generate-config-out as NOT read-only", () => expect(isReadOnlyCommand('terraform plan "-generate-config-out=generated.tf"')).toBe(false));
+  it("detects single-quoted terraform plan -generate-config-out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan '-generate-config-out=generated.tf'")).toBe(false));
+  it("detects escaped terraform plan -generate-config-out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan -generate-config-out\\=generated.tf")).toBe(false));
+  it("detects double-dash terraform plan --generate-config-out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan --generate-config-out=generated.tf")).toBe(false));
+  it("detects quote-spliced terraform plan -generate-config-out as NOT read-only", () => expect(isReadOnlyCommand('terraform plan -generate-config-o""ut=generated.tf')).toBe(false));
+  it("detects ANSI-C quoted terraform plan -generate-config-out as NOT read-only", () => expect(isReadOnlyCommand("terraform plan $'-generate-config-out=generated.tf'")).toBe(false));
+  it("detects shell-expanded terraform plan -generate-config-out separator as NOT read-only", () => expect(isReadOnlyCommand("terraform plan -generate-config-out${IFS}generated.tf")).toBe(false));
+  it("detects shell expansion in terraform plan args as NOT read-only", () => expect(isReadOnlyCommand("terraform plan ${TF_PLAN_ARGS}")).toBe(false));
+  it("detects terraform providers lock as NOT read-only", () => expect(isReadOnlyCommand("terraform providers lock")).toBe(false));
+  it("detects quoted terraform providers schema as read-only", () => expect(isReadOnlyCommand('terraform providers "schema"')).toBe(true));
+  it("detects terraform providers mirror as NOT read-only", () => expect(isReadOnlyCommand("terraform providers mirror ./mirror")).toBe(false));
+  it("detects terraform state rm as NOT read-only", () => expect(isReadOnlyCommand("terraform state rm aws_instance.x")).toBe(false));
+  it("detects helm repo add as NOT read-only", () => expect(isReadOnlyCommand("helm repo add bitnami https://charts.bitnami.com/bitnami")).toBe(false));
+  it("detects quoted helm repo list as read-only", () => expect(isReadOnlyCommand('helm repo "list"')).toBe(true));
+  it("detects output redirection as NOT read-only", () => expect(isReadOnlyCommand("terraform state pull > terraform.tfstate")).toBe(false));
+  it("detects command substitution as NOT read-only", () => expect(isReadOnlyCommand("ls $(touch /tmp/coders-subst)")).toBe(false));
+  it("detects command substitution in terraform state as NOT read-only", () => expect(isReadOnlyCommand("terraform state list $(touch /tmp/coders-subst)")).toBe(false));
+  it("detects command substitution in helm list as NOT read-only", () => expect(isReadOnlyCommand("helm list $(touch /tmp/coders-subst)")).toBe(false));
+  it("detects backtick command substitution in helm version as NOT read-only", () => expect(isReadOnlyCommand("helm version `touch /tmp/coders-subst`")).toBe(false));
+  it("detects process substitution as NOT read-only", () => expect(isReadOnlyCommand("ls <(touch /tmp/coders-procsubst)")).toBe(false));
+  it("detects process substitution in terraform state as NOT read-only", () => expect(isReadOnlyCommand("terraform state list <(touch /tmp/coders-procsubst)")).toBe(false));
+  it("detects process substitution in helm version as NOT read-only", () => expect(isReadOnlyCommand("helm version <(touch /tmp/coders-procsubst)")).toBe(false));
 });

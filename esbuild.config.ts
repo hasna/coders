@@ -1,5 +1,7 @@
 import { build } from "esbuild";
-import { writeFileSync, chmodSync } from "fs";
+import { writeFileSync, chmodSync, readFileSync } from "fs";
+
+const packageJson = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8")) as { version: string };
 
 const shared = {
   bundle: true,
@@ -52,7 +54,7 @@ const shared = {
     "@hasna/attachments",
   ],
   define: {
-    "process.env.CODERS_VERSION": '"0.1.2"',
+    "process.env.CODERS_VERSION": JSON.stringify(packageJson.version),
     "process.env.CODERS_BUILD_TIME": `"${new Date().toISOString()}"`,
   },
   logLevel: "info" as const,
@@ -71,7 +73,8 @@ await build({
 });
 
 writeFileSync("dist/cli.js", `#!/usr/bin/env bun
-import "./cli.mjs";
+import { runCli } from "./cli.mjs";
+runCli();
 `);
 writeFileSync("dist/coders-mcp.js", `#!/usr/bin/env bun
 import "./coders-mcp.mjs";

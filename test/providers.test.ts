@@ -202,7 +202,7 @@ describe("getProvider", () => {
 });
 
 describe("getAvailableProviders", () => {
-  it("returns all 6 providers", () => {
+  it("returns all providers", () => {
     const providers = getAvailableProviders();
     expect(providers).toContain("anthropic");
     expect(providers).toContain("bedrock");
@@ -210,6 +210,9 @@ describe("getAvailableProviders", () => {
     expect(providers).toContain("openai");
     expect(providers).toContain("ollama");
     expect(providers).toContain("foundry");
-    expect(providers.length).toBe(6);
+    expect(providers).toContain("xai");
+    expect(providers).toContain("together");
+    expect(providers).toContain("gemini");
+    expect(providers.length).toBe(9);
   });
 });

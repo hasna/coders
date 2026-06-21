@@ -8,9 +8,11 @@
  * Fast-paths skip the full import chain for instant responses:
  *   --version, --chrome-native-host
  */
+import { resolve } from "path";
+import { pathToFileURL } from "url";
+import { VERSION, BUILD_TIME } from "../core/constants.js";
 
-export const VERSION = "0.1.2";
-export const BUILD_TIME = process.env.CODERS_BUILD_TIME ?? new Date().toISOString();
+export { VERSION, BUILD_TIME };
 export const PACKAGE_NAME = "@hasna/coders";
 export const ISSUES_URL = "https://github.com/hasnaxyz/open-coders/issues";
 
@@ -122,7 +124,7 @@ function onEarlyInput(chunk: Buffer): void {
 
 // ── Bootstrap ──────────────────────────────────────────────────────
 
-async function bootstrap(): Promise<void> {
+export async function bootstrap(): Promise<void> {
   const args = process.argv.slice(2);
   profileCheckpoint("cli_args_parsed");
 
@@ -163,10 +165,26 @@ async function bootstrap(): Promise<void> {
   profileCheckpoint("cli_after_main_complete");
 }
 
-bootstrap().catch((err) => {
-  console.error(`[coders] Fatal error: ${err instanceof Error ? err.message : String(err)}`);
-  if (process.env.CODERS_DEBUG === "true" && err instanceof Error) {
-    console.error(err.stack);
+function isCliEntrypoint(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(resolve(entry)).href;
+  } catch {
+    return false;
   }
-  process.exit(1);
-});
+}
+
+export function runCli(): void {
+  bootstrap().catch((err) => {
+    console.error(`[coders] Fatal error: ${err instanceof Error ? err.message : String(err)}`);
+    if (process.env.CODERS_DEBUG === "true" && err instanceof Error) {
+      console.error(err.stack);
+    }
+    process.exit(1);
+  });
+}
+
+if (isCliEntrypoint()) {
+  runCli();
+}

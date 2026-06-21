@@ -12,6 +12,7 @@
  *   - Brotli/gzip decompression (automatic via fetch)
  */
 import { resolveApiKey, getApiProvider, type ApiProvider, type ResolvedApiKey } from "../auth/api-key.js";
+import { VERSION } from "../core/constants.js";
 import { resolveModelId, getContextWindow, hasExtendedContext } from "./models.js";
 import {
   parseSSEStream,
@@ -143,7 +144,7 @@ export class ApiClient {
       "Content-Type": "application/json",
       "anthropic-version": "2023-06-01",
       "anthropic-beta": BETA_HEADERS.join(","),
-      "User-Agent": `coders/${process.env.CODERS_VERSION ?? "0.0.1"}`,
+      "User-Agent": `coders/${VERSION}`,
     };
 
     if (key.isOAuth) {

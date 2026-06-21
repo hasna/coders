@@ -64,7 +64,7 @@ describe("CLI Integration", () => {
 
   it("auth status works", () => {
     const out = runCLI("auth status");
-    expect(out).toContain("Auth status");
+    expect(out).toContain("Authentication Status");
   });
 });
 

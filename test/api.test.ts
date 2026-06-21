@@ -71,8 +71,12 @@ describe("api/models", () => {
     expect(getContextWindow("opus[1m]")).toBe(1_000_000);
   });
 
-  it("returns 200K for standard models", () => {
-    expect(getContextWindow("sonnet")).toBe(200_000);
+  it("returns registry context for default aliases", () => {
+    expect(getContextWindow("sonnet")).toBe(1_000_000);
+  });
+
+  it("returns 200K for standard non-extended models", () => {
+    expect(getContextWindow("sonnet45")).toBe(200_000);
   });
 
   it("default model is sonnet46", () => {

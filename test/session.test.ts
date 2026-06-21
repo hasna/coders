@@ -84,6 +84,25 @@ describe("session management", () => {
     expect(loaded!.messages).toHaveLength(1);
   });
 
+  it("does not append agent-loop tool history over already persisted UI messages", () => {
+    const session = createSession("/tmp/project");
+    addMessage(session.id, "user", "do thing");
+    addMessage(session.id, "assistant", "done");
+
+    updateSession(session, [
+      { role: "user", content: "do thing" },
+      { role: "assistant", content: [{ type: "tool_use", id: "tool1", name: "Bash", input: { command: "pwd" } }] as any },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "tool1", content: "out" }] as any },
+      { role: "assistant", content: "done" },
+    ], { model: "sonnet" });
+
+    const loaded = loadSession(session.id);
+    expect(loaded!.messages).toEqual([
+      { role: "user", content: "do thing" },
+      { role: "assistant", content: "done" },
+    ]);
+  });
+
   it("tracks current session ID", () => {
     expect(getCurrentSessionId()).toBeNull();
     setCurrentSessionId("test-123");

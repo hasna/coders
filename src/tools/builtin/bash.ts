@@ -133,14 +133,14 @@ const READ_ONLY_COMMANDS = new Set([
   "diff", "comm", "tree", "file", "stat",
   "ps", "top", "htop", "lsof", "pgrep", "netstat", "ss",
   "date", "hostname", "whoami", "uname", "arch", "uptime",
-  "which", "where", "type", "command", "hash",
+  "which", "where", "type",
   "echo", "printf", "test", "true", "false",
-  "pwd", "env", "printenv", "id", "groups",
+  "pwd", "printenv", "id", "groups",
   "man", "help", "info", "apropos",
   "base64", "md5sum", "sha256sum", "shasum",
   "tput", "stty", "tty", "nproc", "getconf",
   "jq", "yq", "xmllint",
-  "curl", // when used with specific flags only
+  "terraform", "helm",
   "npm", "yarn", "pnpm", "bun", // when used with read-only subcommands
   "git", // when used with read-only subcommands
   "docker", "kubectl", // when used with read-only subcommands
@@ -169,6 +169,18 @@ const DOCKER_READ_ONLY_SUBCOMMANDS = new Set([
   "ps", "images", "logs", "inspect", "stats", "top",
   "port", "diff", "history", "info", "version",
 ]);
+
+const TERRAFORM_READ_ONLY_SUBCOMMANDS = new Set([
+  "version", "validate",
+]);
+
+const HELM_READ_ONLY_SUBCOMMANDS = new Set([
+  "list", "ls", "status", "history", "show", "search", "version", "lint",
+]);
+
+const TERRAFORM_STATE_READ_ONLY_SUBCOMMANDS = new Set(["list"]);
+const TERRAFORM_PROVIDERS_READ_ONLY_SUBCOMMANDS = new Set(["schema"]);
+const HELM_REPO_READ_ONLY_SUBCOMMANDS = new Set(["list"]);
 
 /**
  * Detect if a command is read-only (safe for auto-approval).
@@ -202,12 +214,12 @@ function splitCommandChain(command: string): string[] {
       inDoubleQuote = !inDoubleQuote;
       current += ch;
     } else if (!inSingleQuote && !inDoubleQuote) {
-      // Check two-char operators first (&&, ||), then single-char (|, ;)
+      // Check two-char operators first (&&, ||), then single-char separators.
       if ((ch === "&" && command[i + 1] === "&") || (ch === "|" && command[i + 1] === "|")) {
         if (current.trim()) parts.push(current.trim());
         current = "";
         i++; // skip next char
-      } else if (ch === "|" || ch === ";") {
+      } else if (ch === "|" || ch === ";" || ch === "&" || ch === "\n" || ch === "\r") {
         if (current.trim()) parts.push(current.trim());
         current = "";
       } else {
@@ -223,14 +235,18 @@ function splitCommandChain(command: string): string[] {
 }
 
 function isReadOnlyPart(part: string): boolean {
-  // Strip leading env vars (KEY=value cmd ...)
-  let cmd = part;
-  while (/^[A-Z_][A-Z0-9_]*=\S*\s+/.test(cmd)) {
-    cmd = cmd.replace(/^[A-Z_][A-Z0-9_]*=\S*\s+/, "");
-  }
+  if (hasOutputRedirection(part)) return false;
+  if (hasCommandSubstitution(part)) return false;
 
-  // Get the base command
-  const tokens = cmd.split(/\s+/);
+  // Environment assignments can alter "read-only" commands via hooks such as
+  // GIT_EXTERNAL_DIFF, PAGER, LESSOPEN, NODE_OPTIONS, or tool-specific config.
+  // Keep these explicit rather than auto-approving the command after stripping.
+  let cmd = part;
+  if (/^[A-Z_][A-Z0-9_]*=\S*\s+/.test(cmd)) return false;
+
+  // Get the base command. Strip simple shell quote wrapping so safety checks
+  // see "-out=tfplan" the same way the shell will pass it to terraform.
+  const tokens = cmd.split(/\s+/).filter(Boolean).map(normalizeShellToken);
   const baseCmd = tokens[0]?.replace(/^.*\//, ""); // strip path
   if (!baseCmd) return false;
 
@@ -249,10 +265,33 @@ function isReadOnlyPart(part: string): boolean {
       const subCmd = tokens[1];
       return subCmd ? DOCKER_READ_ONLY_SUBCOMMANDS.has(subCmd) : false;
     }
-    // curl is read-only only if no write flags
-    if (baseCmd === "curl") {
-      const dangerous = ["-X", "--request", "-d", "--data", "--data-raw", "--data-binary", "--upload-file", "-o", "--output", "-O", "--remote-name"];
-      return !tokens.some(t => dangerous.includes(t));
+    if (baseCmd === "find") {
+      return !tokens.some(isUnsafeFindArg);
+    }
+    if (baseCmd === "terraform") {
+      const subCmd = tokens[1];
+      if (!subCmd) return false;
+      if (subCmd === "plan") {
+        return !tokens.slice(2).some(isUnsafeTerraformPlanArg);
+      }
+      if (subCmd === "state") {
+        const stateSubCmd = tokens[2];
+        return stateSubCmd ? TERRAFORM_STATE_READ_ONLY_SUBCOMMANDS.has(stateSubCmd) : false;
+      }
+      if (subCmd === "providers") {
+        const providersSubCmd = tokens[2];
+        return providersSubCmd ? TERRAFORM_PROVIDERS_READ_ONLY_SUBCOMMANDS.has(providersSubCmd) : true;
+      }
+      return TERRAFORM_READ_ONLY_SUBCOMMANDS.has(subCmd);
+    }
+    if (baseCmd === "helm") {
+      const subCmd = tokens[1];
+      if (!subCmd) return false;
+      if (subCmd === "repo") {
+        const repoSubCmd = tokens[2];
+        return repoSubCmd ? HELM_REPO_READ_ONLY_SUBCOMMANDS.has(repoSubCmd) : false;
+      }
+      return HELM_READ_ONLY_SUBCOMMANDS.has(subCmd);
     }
     return true;
   }
@@ -263,6 +302,69 @@ function isReadOnlyPart(part: string): boolean {
     return true;
   }
 
+  return false;
+}
+
+function normalizeShellToken(token: string): string {
+  let normalized = token;
+  while (
+    normalized.length >= 2 &&
+    (
+      (normalized.startsWith("'") && normalized.endsWith("'")) ||
+      (normalized.startsWith('"') && normalized.endsWith('"'))
+    )
+  ) {
+    normalized = normalized.slice(1, -1);
+  }
+  return normalized.replace(/\\(.)/g, "$1").replace(/['"]/g, "");
+}
+
+function isUnsafeTerraformPlanArg(token: string): boolean {
+  return hasShellExpansion(token) || isTerraformPlanWriteFlag(token);
+}
+
+function hasShellExpansion(token: string): boolean {
+  return token.includes("$") || token.includes("`");
+}
+
+function isTerraformPlanWriteFlag(token: string): boolean {
+  const writeFlags = ["-out", "--out", "-generate-config-out", "--generate-config-out"];
+  return writeFlags.some((flag) => token === flag || token.startsWith(`${flag}=`));
+}
+
+function isUnsafeFindArg(token: string): boolean {
+  return FIND_UNSAFE_ACTIONS.has(token);
+}
+
+const FIND_UNSAFE_ACTIONS = new Set([
+  "-delete",
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  "-fprint",
+  "-fprint0",
+  "-fprintf",
+  "-fls",
+]);
+
+function hasCommandSubstitution(command: string): boolean {
+  return command.includes("$(") || command.includes("`") || command.includes("<(") || command.includes(">(");
+}
+
+function hasOutputRedirection(command: string): boolean {
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (ch === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+    } else if (ch === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+    } else if (ch === ">" && !inSingleQuote && !inDoubleQuote) {
+      return true;
+    }
+  }
   return false;
 }
 
