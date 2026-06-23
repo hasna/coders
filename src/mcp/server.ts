@@ -14,7 +14,7 @@ import {
   type CallToolResult,
   type Tool as McpTool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { VERSION } from "../cli/index.js";
+import { VERSION } from "../core/constants.js";
 import { getEnabledTools, getTool } from "../tools/registry.js";
 import { getDb } from "../db/index.js";
 
