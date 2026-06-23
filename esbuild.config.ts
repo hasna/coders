@@ -3,6 +3,11 @@ import { writeFileSync, chmodSync, readFileSync } from "fs";
 
 const packageJson = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8")) as { version: string };
 
+const nodeRequireBanner = [
+  'import { createRequire as __codersCreateRequire } from "node:module";',
+  "const require = __codersCreateRequire(import.meta.url);",
+].join("\n");
+
 const shared = {
   bundle: true,
   platform: "node" as const,
@@ -10,6 +15,9 @@ const shared = {
   format: "esm" as const,
   sourcemap: true,
   minify: process.env.NODE_ENV === "production",
+  // Bundled CJS dependencies still call esbuild's __require helper. Node ESM
+  // has no global require, so provide one without relying on Bun compatibility.
+  banner: { js: nodeRequireBanner },
   external: [
     "node:*",
     "fs",
@@ -72,11 +80,11 @@ await build({
   outfile: "dist/coders-mcp.mjs",
 });
 
-writeFileSync("dist/cli.js", `#!/usr/bin/env bun
+writeFileSync("dist/cli.js", `#!/usr/bin/env node
 import { runCli } from "./cli.mjs";
 runCli();
 `);
-writeFileSync("dist/coders-mcp.js", `#!/usr/bin/env bun
+writeFileSync("dist/coders-mcp.js", `#!/usr/bin/env node
 import "./coders-mcp.mjs";
 `);
 chmodSync("dist/cli.js", 0o755);

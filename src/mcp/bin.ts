@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { parseHttpArgv, resolveMcpHttpPort } from "./http.js";
 
 async function main() {
