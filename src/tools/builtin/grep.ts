@@ -19,6 +19,7 @@ import { z } from "zod";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
 import { RipgrepTimeoutError } from "../../core/errors.js";
 import { GREP_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
+import { DEFAULT_TEXT_LIMIT, compactLongText, parseLimit } from "../../utils/output.js";
 
 // ── Schemas ────────────────────────────────────────────────────────
 
@@ -242,9 +243,13 @@ export const grepTool: Tool<GrepInput, GrepOutput> = {
   },
 
   mapToolResultToToolResultBlockParam(result, toolUseId) {
-    let content = result.content;
+    let content = compactLongText(
+      result.content,
+      DEFAULT_TEXT_LIMIT * 2,
+      "Use head_limit, offset, glob/type filters, or output_mode:'count' to inspect more deliberately.",
+    );
     if (result.truncated) {
-      content += "\n(results truncated due to timeout or limit)";
+      content += "\n(results truncated due to timeout, limit, or default compact row cap; use head_limit, offset, glob/type filters, or output_mode:'count' to inspect more deliberately)";
     }
     return {
       type: "tool_result",
@@ -270,11 +275,10 @@ function processOutput(
   }
 
   // Apply head_limit
-  if (input.head_limit && input.head_limit > 0) {
-    if (lines.length > input.head_limit) {
-      lines = lines.slice(0, input.head_limit);
-      truncated = true;
-    }
+  const headLimit = parseLimit(input.head_limit, 100, 500);
+  if (lines.length > headLimit) {
+    lines = lines.slice(0, headLimit);
+    truncated = true;
   }
 
   // Count unique files — handle content mode (file:line:text) vs files_with_matches (file)
@@ -321,5 +325,6 @@ Usage:
 - Supports full regex syntax (e.g., "log.*Error", "function\\s+\\w+")
 - Filter files with glob parameter (e.g., "*.js", "**/*.tsx") or type parameter (e.g., "js", "py")
 - Output modes: "content" shows matching lines, "files_with_matches" shows file paths (default), "count" shows match counts
+- Output is compact by default. Use head_limit and offset to page through large result sets.
 - Use Agent tool for open-ended searches requiring multiple rounds
 - Multiline matching: use multiline: true for cross-line patterns`;

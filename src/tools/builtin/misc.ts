@@ -18,6 +18,7 @@ import {
   NOTEBOOK_EDIT_TOOL, CONFIG_TOOL, SEND_MESSAGE_TOOL, TOOL_SEARCH_TOOL,
   DEFAULT_MAX_RESULT_SIZE_CHARS,
 } from "../../core/constants.js";
+import { parseLimit, truncateLine } from "../../utils/output.js";
 
 // ── Helper to build a minimal tool ─────────────────────────────────
 
@@ -80,10 +81,14 @@ Query forms:
 - "notebook jupyter" — keyword search, up to max_results best matches
 - "+slack send" — require "slack" in the name, rank by remaining terms`,
   async call(input) {
+    const maxResults = parseLimit(input.max_results, 5, 10);
+    const selectedNames = input.query.toLowerCase().startsWith("select:")
+      ? input.query.slice(7).split(",").map((n: string) => n.trim()).filter(Boolean)
+      : [];
     // Search deferred tool schemas
-    const matchedSchemas = searchDeferredToolSchemas(input.query, input.max_results);
+    const matchedSchemas = searchDeferredToolSchemas(input.query, maxResults);
     // Also search the registry for registered/MCP tools (for completeness)
-    const registryResults = registrySearchTools(input.query, input.max_results);
+    const registryResults = registrySearchTools(input.query, maxResults);
     const allDeferred = getAllDeferredToolSchemas();
 
     return {
@@ -91,6 +96,8 @@ Query forms:
         matchedSchemas,
         registryResults,
         totalDeferredCount: allDeferred.length,
+        maxResults,
+        omittedSelectionCount: Math.max(0, selectedNames.length - maxResults),
       },
     };
   },
@@ -114,7 +121,7 @@ Query forms:
       );
       if (extraHits.length > 0) {
         const lines = extraHits.map((r: { name: string; hint: string; deferred: boolean }) =>
-          `${r.name}${r.deferred ? " (deferred)" : ""}: ${r.hint}`
+          `${r.name}${r.deferred ? " (deferred)" : ""}: ${truncateLine(r.hint, 140)}`
         );
         sections.push(lines.join("\n"));
       }
@@ -124,7 +131,8 @@ Query forms:
       return { type: "tool_result", tool_use_id: id, content: "No tools found matching the query." };
     }
 
-    const footer = `\n\n${result.totalDeferredCount} deferred tool(s) available. Use ToolSearch to fetch schemas for any listed tool.`;
+    const omitted = result.omittedSelectionCount > 0 ? ` ${result.omittedSelectionCount} selected schema(s) omitted by the cap.` : "";
+    const footer = `\n\n${result.totalDeferredCount} deferred tool(s) available. Showing up to ${result.maxResults ?? 5}.${omitted} Use ToolSearch with a narrower query to fetch specific schemas.`;
     return { type: "tool_result", tool_use_id: id, content: sections.join("\n\n") + footer };
   },
 });

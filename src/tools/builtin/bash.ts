@@ -27,6 +27,7 @@ import {
   failTask as failBgTask,
   writeTaskOutput,
 } from "../../core/background-tasks.js";
+import { DEFAULT_TEXT_LIMIT, compactLongTextMiddle } from "../../utils/output.js";
 
 // ── Dangerous command patterns (always blocked) ────────────────────
 
@@ -642,10 +643,16 @@ export const bashTool: Tool<BashInput, BashOutput> = {
       parts.push(`Background task ID: ${result.backgroundTaskId}`);
     }
 
+    const content = compactLongTextMiddle(
+      parts.join("\n").trim() || "(no output)",
+      DEFAULT_TEXT_LIMIT * 3,
+      "Use run_in_background:true with TaskOutput limit, redirect output to a file, or narrow the command for more detail.",
+    );
+
     return {
       type: "tool_result",
       tool_use_id: toolUseId,
-      content: parts.join("\n").trim() || "(no output)",
+      content,
       is_error: (result.exitCode !== null && result.exitCode !== 0) || result.interrupted,
     };
   },

@@ -108,7 +108,7 @@ const VERBS = ["Baked", "Brewed", "Churned", "Cogitated", "Cooked", "Crunched", 
 
 // ── Tool JSON Schemas (sent to the API so the model knows each tool's parameters) ──
 
-const TOOL_JSON_SCHEMAS: Record<string, Record<string, unknown>> = {
+export const TOOL_JSON_SCHEMAS: Record<string, Record<string, unknown>> = {
   Bash: {
     type: "object",
     properties: {
@@ -206,7 +206,12 @@ const TOOL_JSON_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   TaskList: {
     type: "object",
-    properties: {},
+    properties: {
+      status: { type: "string", enum: ["pending", "in_progress", "completed", "failed", "cancelled"], description: "Only list tasks with this status" },
+      limit: { type: "number", description: "Maximum tasks to render in the compact summary" },
+      offset: { type: "number", description: "Number of matching tasks to skip before rendering the summary" },
+      verbose: { type: "boolean", description: "Include truncated description previews" },
+    },
   },
   TaskUpdate: {
     type: "object",
@@ -366,6 +371,7 @@ const TOOL_JSON_SCHEMAS: Record<string, Record<string, unknown>> = {
     type: "object",
     properties: {
       task_id: { type: "string", description: "The ID of the background task to check (e.g. 'bg-1', 'agent-2')" },
+      limit: { type: "number", description: "Maximum output characters to return in the compact summary" },
     },
     required: ["task_id"],
   },
@@ -378,13 +384,19 @@ const TOOL_JSON_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
   ListMcpResourcesTool: {
     type: "object",
-    properties: {},
+    properties: {
+      limit: { type: "number", description: "Maximum resources to render in the compact summary" },
+      offset: { type: "number", description: "Number of resources to skip before rendering the summary" },
+      verbose: { type: "boolean", description: "Include full URI and description text" },
+    },
   },
   ReadMcpResourceTool: {
     type: "object",
     properties: {
       server_name: { type: "string", description: "The name of the MCP server that owns the resource" },
       uri: { type: "string", description: "The URI of the resource to read" },
+      limit: { type: "number", description: "Maximum text/blob characters to render in the compact summary" },
+      offset: { type: "number", description: "Character offset to render from in the compact summary" },
     },
     required: ["server_name", "uri"],
   },
@@ -408,7 +420,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   Agent: "Launch a sub-agent to handle complex, multi-step tasks autonomously. Supports multiple agent types.",
   TaskCreate: "Create a new task in the task list for tracking work.",
   TaskGet: "Get a task by ID to view full details including description and dependencies.",
-  TaskList: "List all tasks to see status, owners, and blockers.",
+  TaskList: "List tasks compactly; use status, limit, offset, verbose, and TaskGet for details.",
   TaskUpdate: "Update a task: change status, subject, description, owner, or dependencies.",
   AskUserQuestion: "Present structured multiple-choice questions to the user for clarification.",
   WebSearch: "Search the web for current information using the model's built-in web search.",
@@ -425,10 +437,10 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   NotebookEdit: "Edit Jupyter notebook cells — insert, replace, delete, move cells, or change cell type. Preserves all metadata and outputs.",
   Config: "Get or set a configuration setting.",
   SendMessage: "Send a direct message to another agent or to the user.",
-  TaskOutput: "Check the status and output of a background task (bash or agent).",
+  TaskOutput: "Check compact status/output for a background task (bash or agent); use limit for more output.",
   TaskStop: "Stop a running background task by its ID.",
-  ListMcpResourcesTool: "List all resources available from connected MCP servers.",
-  ReadMcpResourceTool: "Read a resource from a connected MCP server by server name and URI.",
+  ListMcpResourcesTool: "List MCP resources compactly; use limit, offset, and verbose for more.",
+  ReadMcpResourceTool: "Read a compact resource chunk by server name and URI; use limit and offset for more.",
   Skill: "Execute a skill within the main conversation. Skills are user-defined prompts in .coders/skills/ or .claude/skills/ directories.",
 };
 

@@ -20,6 +20,12 @@ import {
   readTaskOutput,
   type BackgroundTask,
 } from "../../core/background-tasks.js";
+import {
+  DEFAULT_TEXT_LIMIT,
+  MAX_TEXT_LIMIT,
+  compactLongTextMiddle,
+  parseLimit,
+} from "../../utils/output.js";
 
 // ── Max output chars to return in a single call ─────────────────────
 
@@ -31,6 +37,7 @@ const MAX_OUTPUT_CHARS = 30_000;
 
 const TaskOutputInputSchema = z.strictObject({
   task_id: z.string().describe("The ID of the background task to check (e.g. 'bg-1', 'agent-2')"),
+  limit: z.number().optional().describe("Maximum output characters to return. Defaults to a compact summary."),
 });
 
 type TaskOutputInput = z.infer<typeof TaskOutputInputSchema>;
@@ -43,6 +50,10 @@ interface TaskOutputResult {
   durationMs?: number;
   error?: string;
   progress?: BackgroundTask["progress"];
+  totalOutputChars?: number;
+  returnedOutputChars?: number;
+  truncated?: boolean;
+  limit?: number;
 }
 
 const TaskOutputOutputSchema = z.object({
@@ -52,6 +63,10 @@ const TaskOutputOutputSchema = z.object({
   exitCode: z.number().nullable().optional(),
   durationMs: z.number().optional(),
   error: z.string().optional(),
+  totalOutputChars: z.number().optional(),
+  returnedOutputChars: z.number().optional(),
+  truncated: z.boolean().optional(),
+  limit: z.number().optional(),
   progress: z.object({
     tokenCount: z.number().optional(),
     lastActivity: z.string().optional(),
@@ -101,6 +116,7 @@ export const taskOutputTool: Tool<TaskOutputInput, TaskOutputResult> = {
           status: "not_found",
           output: `No background task found with ID "${input.task_id}". Use TaskList or check the ID returned when you started the background task.`,
           error: `Task "${input.task_id}" not found`,
+          truncated: false,
         },
       };
     }
@@ -108,14 +124,14 @@ export const taskOutputTool: Tool<TaskOutputInput, TaskOutputResult> = {
     // Read output (prefer disk for large output, fall back to in-memory)
     let output = readTaskOutput(task.id);
     if (!output && task.output) output = task.output;
-
-    // Truncate if needed
-    if (output.length > MAX_OUTPUT_CHARS) {
-      const half = Math.floor(MAX_OUTPUT_CHARS / 2);
-      output = output.slice(0, half)
-        + `\n\n... (${output.length - MAX_OUTPUT_CHARS} characters truncated) ...\n\n`
-        + output.slice(-half);
-    }
+    const rawOutput = output || "(no output yet)";
+    const limit = parseLimit(input.limit, DEFAULT_TEXT_LIMIT, MAX_TEXT_LIMIT);
+    const truncated = rawOutput.length > limit;
+    output = compactLongTextMiddle(
+      rawOutput,
+      limit,
+      `Use TaskOutput with limit:${MAX_OUTPUT_CHARS} to request the maximum detail.`,
+    );
 
     const durationMs = task.endTime
       ? task.endTime - task.startTime
@@ -130,6 +146,10 @@ export const taskOutputTool: Tool<TaskOutputInput, TaskOutputResult> = {
         durationMs,
         error: task.error,
         progress: task.progress,
+        totalOutputChars: rawOutput.length,
+        returnedOutputChars: output.length,
+        truncated,
+        limit,
       },
     };
   },
@@ -157,12 +177,21 @@ export const taskOutputTool: Tool<TaskOutputInput, TaskOutputResult> = {
       parts.push(`Last activity: ${result.progress.lastActivity}`);
     }
 
+    if (result.totalOutputChars != null) {
+      parts.push(`Output: ${result.returnedOutputChars ?? result.output.length}/${result.totalOutputChars} chars`);
+    }
+
     if (result.error) {
       parts.push(`Error: ${result.error}`);
     }
 
     parts.push("");
     parts.push(result.output);
+
+    if (result.truncated) {
+      parts.push("");
+      parts.push(`Output truncated. Use TaskOutput with limit:${MAX_OUTPUT_CHARS} for the largest single response, or inspect the task output file directly for full logs.`);
+    }
 
     return {
       type: "tool_result",
@@ -279,12 +308,14 @@ Use this tool when you have previously started a bash command or agent with run_
 and need to check whether it has completed, and retrieve its output.
 
 The task_id is returned when you start a background task (e.g., "bg-1" for bash, "agent-1" for agents).
+Pass limit to request more output; the default response is compact.
 
 The tool returns:
 - status: "running", "completed", "failed", or "killed"
-- output: The stdout/stderr from the task (truncated to 30000 chars)
+- output: The stdout/stderr from the task, compact by default with an explicit limit option
 - exitCode: The exit code (for bash tasks)
 - durationMs: How long the task has been running or ran
+- totalOutputChars / returnedOutputChars / truncated: output sizing metadata
 - progress: For agents, includes tokenCount and lastActivity`;
 
 const TASK_STOP_PROMPT = `Stop a running background task.

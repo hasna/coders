@@ -21,6 +21,7 @@ import {
   failTask as failBgTask,
   updateTask as updateBgTask,
 } from "../../core/background-tasks.js";
+import { DEFAULT_TEXT_LIMIT, compactLongText } from "../../utils/output.js";
 
 // ── Agent types and their available tools ──────────────────────────
 
@@ -325,7 +326,7 @@ export const agentTool: Tool<AgentInput, AgentOutput> = {
     return {
       type: "tool_result",
       tool_use_id: toolUseId,
-      content: truncate(content, DEFAULT_MAX_RESULT_SIZE_CHARS),
+      content: compactLongText(content, DEFAULT_TEXT_LIMIT * 3, "Run the agent in background and use TaskOutput limit for larger transcripts."),
     };
   },
 };
@@ -436,11 +437,6 @@ function runAgentInBackground(
     // Clean up after 5 minutes
     setTimeout(() => runningAgents.delete(agentId), 5 * 60 * 1000);
   });
-}
-
-function truncate(str: string, maxLen: number): string {
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen - 100) + "\n\n... (truncated)";
 }
 
 // ── Prompt ─────────────────────────────────────────────────────────

@@ -13,7 +13,8 @@ import {
   TASK_UPDATE_TOOL,
   DEFAULT_MAX_RESULT_SIZE_CHARS,
 } from "../../core/constants.js";
-import { getTodosIntegration, type Task, type TaskStatus } from "../../integrations/todos.js";
+import { getTodosIntegration, type Task } from "../../integrations/todos.js";
+import { parseLimit, sliceWithLimit, truncateLine, compactLongText } from "../../utils/output.js";
 
 // ── Shared schema pieces ───────────────────────────────────────────
 
@@ -122,7 +123,7 @@ export const taskGetTool: Tool<TaskGetInput, { task: Task | null }> = {
     const lines = [
       `Task #${t.id}: ${t.subject}`,
       `Status: ${t.status}`,
-      `Description: ${t.description}`,
+      `Description: ${compactLongText(t.description, 2_000, "Use task storage directly or JSON export for the full description.")}`,
     ];
     if (t.owner) lines.push(`Owner: ${t.owner}`);
     if (t.blockedBy.length > 0) lines.push(`Blocked by: ${t.blockedBy.map(id => `#${id}`).join(", ")}`);
@@ -133,9 +134,27 @@ export const taskGetTool: Tool<TaskGetInput, { task: Task | null }> = {
 
 // ── TaskList ───────────────────────────────────────────────────────
 
-const TaskListInputSchema = z.strictObject({});
+const TaskListInputSchema = z.strictObject({
+  status: TaskStatusSchema.optional().describe("Only list tasks with this status"),
+  limit: z.number().optional().describe("Maximum number of tasks to return in the default summary"),
+  offset: z.number().optional().describe("Number of matching tasks to skip before rendering the summary"),
+  verbose: z.boolean().optional().describe("Include truncated descriptions in the summary"),
+});
 
-export const taskListTool: Tool<Record<string, never>, { tasks: Task[] }> = {
+type TaskListInput = z.infer<typeof TaskListInputSchema>;
+
+interface TaskListOutput {
+  tasks: Task[];
+  totalCount: number;
+  hiddenCount: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  nextOffset?: number;
+  verbose?: boolean;
+}
+
+export const taskListTool: Tool<TaskListInput, TaskListOutput> = {
   name: TASK_LIST_TOOL,
   searchHint: "list all tasks",
   maxResultSizeChars: DEFAULT_MAX_RESULT_SIZE_CHARS,
@@ -145,7 +164,7 @@ export const taskListTool: Tool<Record<string, never>, { tasks: Task[] }> = {
   async prompt() { return TASK_LIST_PROMPT; },
 
   get inputSchema() { return TaskListInputSchema; },
-  get outputSchema() { return z.object({ tasks: z.array(z.any()) }); },
+  get outputSchema() { return z.object({ tasks: z.array(z.any()), totalCount: z.number(), hiddenCount: z.number(), limit: z.number(), offset: z.number(), hasMore: z.boolean(), nextOffset: z.number().optional(), verbose: z.boolean().optional() }); },
 
   userFacingName() { return "TaskList"; },
   isEnabled() { return true; },
@@ -156,22 +175,54 @@ export const taskListTool: Tool<Record<string, never>, { tasks: Task[] }> = {
   async checkPermissions(input) { return { behavior: "allow", updatedInput: input }; },
   async validateInput() { return { result: true }; },
 
-  async call(): Promise<ToolCallResult<{ tasks: Task[] }>> {
+  async call(input = {}): Promise<ToolCallResult<TaskListOutput>> {
     const todos = getTodosIntegration();
-    const tasks = await todos.listTasks();
-    return { data: { tasks } };
+    const allTasks = await todos.listTasks(input.status ? { status: input.status } : undefined);
+    const limit = parseLimit(input.limit, 20, 200);
+    const offset = Math.max(0, Math.floor(input.offset ?? 0));
+    const shown = Math.min(limit, Math.max(0, allTasks.length - offset));
+    const hidden = Math.max(0, allTasks.length - offset - shown);
+    return {
+      data: {
+        tasks: allTasks,
+        totalCount: allTasks.length,
+        hiddenCount: hidden,
+        limit,
+        offset,
+        hasMore: hidden > 0,
+        nextOffset: hidden > 0 ? offset + shown : undefined,
+        verbose: input.verbose,
+      },
+    };
   },
 
   mapToolResultToToolResultBlockParam(result, toolUseId) {
-    if (result.tasks.length === 0) {
+    const totalCount = result.totalCount ?? result.tasks.length;
+    const limit = result.limit ?? Math.max(result.tasks.length, 20);
+    const offset = result.offset ?? 0;
+    const { items: visibleTasks, hidden } = sliceWithLimit(result.tasks.slice(offset), limit);
+    const hiddenCount = result.hiddenCount ?? hidden;
+    const nextOffset = result.nextOffset ?? (hiddenCount > 0 ? offset + visibleTasks.length : undefined);
+    if (totalCount === 0) {
       return { type: "tool_result", tool_use_id: toolUseId, content: "No tasks found" };
     }
-    const lines = result.tasks.map((t) => {
+    const lines = visibleTasks.map((t) => {
       const owner = t.owner ? ` (${t.owner})` : "";
       const blocked = t.blockedBy.length > 0 ? ` [blocked by ${t.blockedBy.map(id => `#${id}`).join(", ")}]` : "";
-      return `#${t.id} [${t.status}] ${t.subject}${owner}${blocked}`;
+      const subject = truncateLine(t.subject, 100);
+      const description = result.verbose && t.description
+        ? ` — ${truncateLine(t.description, 160)}`
+        : "";
+      return `#${t.id} [${t.status}] ${subject}${owner}${blocked}${description}`;
     });
-    return { type: "tool_result", tool_use_id: toolUseId, content: lines.join("\n") };
+    const footer = hiddenCount > 0
+      ? `\n\n${hiddenCount} more task(s) hidden. Use TaskList with offset:${nextOffset} limit:${limit}, or TaskGet for details.`
+      : "\n\nUse TaskGet with an ID for full details.";
+    return {
+      type: "tool_result",
+      tool_use_id: toolUseId,
+      content: `Tasks (${offset + visibleTasks.length}/${totalCount}, showing ${visibleTasks.length}):\n${lines.join("\n")}${footer}`,
+    };
   },
 };
 
@@ -288,5 +339,5 @@ export const taskUpdateTool: Tool<TaskUpdateInput, TaskUpdateOutput> = {
 
 const TASK_CREATE_PROMPT = `Create a new task in the task list. Use proactively for multi-step tasks.`;
 const TASK_GET_PROMPT = `Get a task by ID to view full details including description and dependencies.`;
-const TASK_LIST_PROMPT = `List all tasks to see status, owners, and blockers.`;
+const TASK_LIST_PROMPT = `List tasks compactly to see status, owners, and blockers. Use status to filter, limit and offset to page rows, verbose:true for description previews, and TaskGet for full task details.`;
 const TASK_UPDATE_PROMPT = `Update a task: change status, subject, description, owner, or dependencies. Use "deleted" status to remove.`;

@@ -17,6 +17,7 @@ import {
 import { VERSION } from "../cli/index.js";
 import { getEnabledTools, getTool } from "../tools/registry.js";
 import { getDb } from "../db/index.js";
+import { DEFAULT_TEXT_LIMIT, compactLongText, parseLimit, sliceWithLimit, truncateLine } from "../utils/output.js";
 
 // ── Agent registry (in-memory) ─────────────────────────────────────
 const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>();
@@ -68,7 +69,7 @@ export async function createMcpServer(options: McpServerOptions = {}): Promise<S
       { name: "register_agent", description: "Register an agent session (idempotent). Auto-updates last_seen_at on re-register.", inputSchema: { type: "object", properties: { name: { type: "string" }, session_id: { type: "string" } }, required: ["name"] } },
       { name: "heartbeat", description: "Update last_seen_at to signal agent is active.", inputSchema: { type: "object", properties: { agent_id: { type: "string" } }, required: ["agent_id"] } },
       { name: "set_focus", description: "Set active project context for this agent session.", inputSchema: { type: "object", properties: { agent_id: { type: "string" }, project_id: { type: "string" } }, required: ["agent_id"] } },
-      { name: "list_agents", description: "List all registered agents.", inputSchema: { type: "object", properties: {} } },
+      { name: "list_agents", description: "List registered agents. Returns the historical JSON array by default; pass format:'text' for a compact table.", inputSchema: { type: "object", properties: { limit: { type: "number" }, format: { type: "string", enum: ["json", "text"] } } } },
       { name: "send_feedback", description: "Send feedback about this service", inputSchema: { type: "object", properties: { message: { type: "string" }, email: { type: "string" }, category: { type: "string", enum: ["bug", "feature", "general"] } }, required: ["message"] } },
     );
 
@@ -106,7 +107,26 @@ export async function createMcpServer(options: McpServerOptions = {}): Promise<S
     }
     if (name === "list_agents") {
       const agents = [..._agentReg.values()];
-      return { content: [{ type: "text", text: agents.length === 0 ? "No agents registered." : JSON.stringify(agents, null, 2) }] };
+      if (agents.length === 0) return { content: [{ type: "text", text: "No agents registered." }] };
+      const requested = args as { limit?: number; format?: "json" | "text" } | undefined;
+      if (requested?.format !== "text") {
+        return { content: [{ type: "text", text: JSON.stringify(agents, null, 2) }] };
+      }
+      const limit = parseLimit(requested?.limit, 20, 200);
+      const visible = sliceWithLimit(agents, limit);
+      const lines = visible.items.map((a) => {
+        const focus = a.project_id ? ` ${truncateLine(a.project_id, 60)}` : "";
+        return `${a.id.padEnd(10)} ${truncateLine(a.name, 32).padEnd(32)} ${a.last_seen_at}${focus}`;
+      });
+      const hidden = visible.hidden > 0
+        ? `\n${visible.hidden} more agent(s) hidden. Call list_agents with limit:${Math.min(agents.length, limit * 2)} for more.`
+        : "";
+      return {
+        content: [{
+          type: "text",
+          text: `Agents (${visible.items.length}/${agents.length}):\nID         Name                             Last seen${lines.length ? `\n${lines.join("\n")}` : ""}${hidden}`,
+        }],
+      };
     }
     if (name === "send_feedback") {
       try {
@@ -146,9 +166,14 @@ export async function createMcpServer(options: McpServerOptions = {}): Promise<S
       // Execute
       const result = await tool.call(args as any, context);
       const block = tool.mapToolResultToToolResultBlockParam(result.data, "mcp-call");
+      const content = compactLongText(
+        block.content,
+        DEFAULT_TEXT_LIMIT * 3,
+        "Use the tool's limit, filter, verbose, or detail parameters for more content.",
+      );
 
       return {
-        content: [{ type: "text", text: block.content }],
+        content: [{ type: "text", text: content }],
         isError: block.is_error ?? false,
       } satisfies CallToolResult;
     } catch (error) {

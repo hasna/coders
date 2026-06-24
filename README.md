@@ -17,6 +17,26 @@ npm install -g @hasna/coders
 coders --help
 ```
 
+### Compact Output Defaults
+
+Coders keeps human and agent-facing output compact by default. List and status
+commands show essential fields, cap row counts, truncate long text, and include
+hints for the next detail command.
+
+Use gradual disclosure when you need more:
+
+```bash
+coders mcp list --limit 50 --verbose
+coders plugin list --builtin --limit 50 --verbose
+coders mcp get <name> --json
+coders plugin list --json
+```
+
+The same policy applies to interactive slash commands and tool results. Large
+tool outputs are summarized before they are returned to the model; use explicit
+`limit`, `verbose`, filters, pagination, or detail tools such as `TaskGet`,
+`TaskOutput`, and `ReadMcpResourceTool` to inspect more deliberately.
+
 ## Cloud Sync
 
 This package supports cloud sync via `@hasna/cloud`:

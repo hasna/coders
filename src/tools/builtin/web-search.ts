@@ -6,6 +6,7 @@
 import { z } from "zod";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
 import { WEB_SEARCH_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
+import { DEFAULT_TEXT_LIMIT, compactLongText } from "../../utils/output.js";
 
 const WebSearchInputSchema = z.strictObject({
   query: z.string().min(2).describe("The search query"),
@@ -102,9 +103,14 @@ export const webSearchTool: Tool<WebSearchInput, WebSearchOutput> = {
   },
 
   mapToolResultToToolResultBlockParam(result, toolUseId) {
-    const content = result.results.map(r =>
+    const rawContent = result.results.map(r =>
       typeof r === "string" ? r : `Links: ${JSON.stringify(r.content)}`
     ).join("\n\n");
+    const content = compactLongText(
+      rawContent,
+      DEFAULT_TEXT_LIMIT,
+      "Use a narrower query or allowed_domains to retrieve a more focused result set.",
+    );
     return {
       type: "tool_result",
       tool_use_id: toolUseId,
