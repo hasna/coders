@@ -16,10 +16,21 @@ import {
   getConnectedServerNames,
   getServerClient,
 } from "../../mcp/client.js";
+import {
+  DEFAULT_TEXT_LIMIT,
+  MAX_TEXT_LIMIT,
+  parseLimit,
+  sliceWithLimit,
+  truncateLine,
+} from "../../utils/output.js";
 
 // ── ListMcpResourcesTool ────────────────────────────────────────────
 
-const ListMcpResourcesInputSchema = z.strictObject({});
+const ListMcpResourcesInputSchema = z.strictObject({
+  limit: z.number().optional().describe("Maximum resources to include in the default summary"),
+  offset: z.number().optional().describe("Number of resources to skip before rendering the summary"),
+  verbose: z.boolean().optional().describe("Include full URI and description text in the summary"),
+});
 
 type ListMcpResourcesInput = z.infer<typeof ListMcpResourcesInputSchema>;
 
@@ -34,6 +45,12 @@ interface McpResourceEntry {
 interface ListMcpResourcesOutput {
   resources: McpResourceEntry[];
   totalCount: number;
+  hiddenCount: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  nextOffset?: number;
+  verbose?: boolean;
 }
 
 const ListMcpResourcesOutputSchema = z.object({
@@ -45,6 +62,12 @@ const ListMcpResourcesOutputSchema = z.object({
     mimeType: z.string().optional(),
   })),
   totalCount: z.number(),
+  hiddenCount: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+  hasMore: z.boolean(),
+  nextOffset: z.number().optional(),
+  verbose: z.boolean().optional(),
 });
 
 export const listMcpResourcesTool: Tool<ListMcpResourcesInput, ListMcpResourcesOutput> = {
@@ -81,7 +104,7 @@ export const listMcpResourcesTool: Tool<ListMcpResourcesInput, ListMcpResourcesO
     return { behavior: "allow", updatedInput: input };
   },
 
-  async call(_input, _context): Promise<ToolCallResult<ListMcpResourcesOutput>> {
+  async call(input = {}, _context): Promise<ToolCallResult<ListMcpResourcesOutput>> {
     const serverNames = getConnectedServerNames();
     const resources: McpResourceEntry[] = [];
 
@@ -107,10 +130,21 @@ export const listMcpResourcesTool: Tool<ListMcpResourcesInput, ListMcpResourcesO
       }
     }
 
+    const limit = parseLimit(input.limit, 20, 200);
+    const offset = Math.max(0, Math.floor(input.offset ?? 0));
+    const shown = Math.min(limit, Math.max(0, resources.length - offset));
+    const hidden = Math.max(0, resources.length - offset - shown);
+
     return {
       data: {
         resources,
         totalCount: resources.length,
+        hiddenCount: hidden,
+        limit,
+        offset,
+        hasMore: hidden > 0,
+        nextOffset: hidden > 0 ? offset + shown : undefined,
+        verbose: input.verbose,
       },
     };
   },
@@ -124,24 +158,36 @@ export const listMcpResourcesTool: Tool<ListMcpResourcesInput, ListMcpResourcesO
       };
     }
 
-    const lines = result.resources.map((r) => {
-      let line = `[${r.server}] ${r.uri} — ${r.name}`;
-      if (r.description) line += ` (${r.description})`;
+    const offset = result.offset ?? 0;
+    const limit = result.limit ?? 20;
+    const { items: visibleResources, hidden } = sliceWithLimit(result.resources.slice(offset), limit);
+    const hiddenCount = result.hiddenCount ?? hidden;
+    const nextOffset = result.nextOffset ?? (hiddenCount > 0 ? offset + visibleResources.length : undefined);
+    const lines = visibleResources.map((r) => {
+      const uri = result.verbose ? r.uri : truncateLine(r.uri, 96);
+      let line = `[${r.server}] ${uri} - ${truncateLine(r.name, 80)}`;
+      if (r.description) {
+        line += ` (${result.verbose ? r.description : truncateLine(r.description, 120)})`;
+      }
       if (r.mimeType) line += ` [${r.mimeType}]`;
       return line;
     });
+    const hiddenHint = hiddenCount > 0
+      ? `\n\n${hiddenCount} more resource(s) hidden. Use offset:${nextOffset} limit:${limit}, or ReadMcpResourceTool for a specific URI.`
+      : "";
+    const detailHint = result.verbose ? "" : "\nUse verbose:true for full URI and description text.";
 
     return {
       type: "tool_result",
       tool_use_id: toolUseId,
-      content: `Found ${result.totalCount} resource(s):\n\n${lines.join("\n")}`,
+      content: `Found ${result.totalCount} resource(s), showing ${visibleResources.length}:\n\n${lines.join("\n")}${hiddenHint}${detailHint}`,
     };
   },
 };
 
 const LIST_MCP_RESOURCES_PROMPT = `List all resources available from connected MCP servers.
 - Returns resources with server name, URI, name, description, and MIME type
-- No input required — queries all connected servers
+- Compact by default. Use limit and offset to page rows, and verbose:true for full text.
 - Use ReadMcpResourceTool to read a specific resource by server name and URI`;
 
 // ── ReadMcpResourceTool ─────────────────────────────────────────────
@@ -149,6 +195,8 @@ const LIST_MCP_RESOURCES_PROMPT = `List all resources available from connected M
 const ReadMcpResourceInputSchema = z.strictObject({
   server_name: z.string().describe("The name of the MCP server that owns the resource"),
   uri: z.string().describe("The URI of the resource to read"),
+  limit: z.number().optional().describe("Maximum text/blob characters to return. Defaults to a compact summary."),
+  offset: z.number().optional().describe("Character offset to render from in the compact summary"),
 });
 
 type ReadMcpResourceInput = z.infer<typeof ReadMcpResourceInputSchema>;
@@ -159,7 +207,10 @@ interface ReadMcpResourceOutput {
     mimeType?: string;
     text?: string;
     blob?: string;
+    totalChars?: number;
   }>;
+  limit: number;
+  offset: number;
 }
 
 const ReadMcpResourceOutputSchema = z.object({
@@ -168,7 +219,10 @@ const ReadMcpResourceOutputSchema = z.object({
     mimeType: z.string().optional(),
     text: z.string().optional(),
     blob: z.string().optional(),
+    totalChars: z.number().optional(),
   })),
+  limit: z.number(),
+  offset: z.number(),
 });
 
 export const readMcpResourceTool: Tool<ReadMcpResourceInput, ReadMcpResourceOutput> = {
@@ -214,6 +268,8 @@ export const readMcpResourceTool: Tool<ReadMcpResourceInput, ReadMcpResourceOutp
   },
 
   async call(input, _context): Promise<ToolCallResult<ReadMcpResourceOutput>> {
+    const limit = parseLimit(input.limit, DEFAULT_TEXT_LIMIT, MAX_TEXT_LIMIT);
+    const offset = Math.max(0, Math.floor(input.offset ?? 0));
     const client = getServerClient(input.server_name);
     if (!client) {
       return {
@@ -221,7 +277,10 @@ export const readMcpResourceTool: Tool<ReadMcpResourceInput, ReadMcpResourceOutp
           contents: [{
             uri: input.uri,
             text: `Error: MCP server "${input.server_name}" is not connected. Use ListMcpResourcesTool to see available servers.`,
+            totalChars: 0,
           }],
+          limit,
+          offset,
         },
       };
     }
@@ -229,21 +288,30 @@ export const readMcpResourceTool: Tool<ReadMcpResourceInput, ReadMcpResourceOutp
     try {
       const result = await client.readResource({ uri: input.uri });
 
-      const contents = (result.contents ?? []).map((c: any) => ({
-        uri: c.uri ?? input.uri,
-        mimeType: c.mimeType,
-        text: c.text,
-        blob: c.blob,
-      }));
+      const contents = (result.contents ?? []).map((c: any) => {
+        const rawText = c.text == null ? undefined : String(c.text);
+        const rawBlob = c.blob == null ? undefined : String(c.blob);
+        const raw = rawText ?? rawBlob ?? "";
+        return {
+          uri: c.uri ?? input.uri,
+          mimeType: c.mimeType,
+          text: rawText,
+          blob: rawText == null ? rawBlob : undefined,
+          totalChars: raw.length,
+        };
+      });
 
-      return { data: { contents } };
+      return { data: { contents, limit, offset } };
     } catch (error) {
       return {
         data: {
           contents: [{
             uri: input.uri,
             text: `Error reading resource: ${error instanceof Error ? error.message : String(error)}`,
+            totalChars: 0,
           }],
+          limit,
+          offset,
         },
       };
     }
@@ -261,9 +329,12 @@ export const readMcpResourceTool: Tool<ReadMcpResourceInput, ReadMcpResourceOutp
     const parts: string[] = [];
     for (const c of result.contents) {
       if (c.text) {
-        parts.push(c.text);
+        const rendered = renderResourceContent(c.text, result.offset, result.limit);
+        parts.push(`${rendered.text}${rendered.metadata}`);
       } else if (c.blob) {
-        parts.push(`[base64 blob, ${c.blob.length} chars]${c.mimeType ? ` (${c.mimeType})` : ""}`);
+        const blobLimit = Math.min(result.limit, 1_000);
+        const rendered = renderResourceContent(c.blob, result.offset, blobLimit);
+        parts.push(`[base64 blob preview]${c.mimeType ? ` (${c.mimeType})` : ""}\n${rendered.text}${rendered.metadata}`);
       } else {
         parts.push(`[empty content for ${c.uri}]`);
       }
@@ -280,4 +351,15 @@ export const readMcpResourceTool: Tool<ReadMcpResourceInput, ReadMcpResourceOutp
 const READ_MCP_RESOURCE_PROMPT = `Read a resource from a connected MCP server.
 - Requires server_name (the MCP server name) and uri (the resource URI)
 - Use ListMcpResourcesTool first to discover available resources
-- Returns text content or base64-encoded binary data`;
+- Returns compact text content by default. Pass limit and offset for more characters. Binary blobs are previewed.`;
+
+function renderResourceContent(value: string, offset: number, limit: number): { text: string; metadata: string } {
+  const safeOffset = Math.min(Math.max(0, offset), value.length);
+  const safeLimit = parseLimit(limit, DEFAULT_TEXT_LIMIT, MAX_TEXT_LIMIT);
+  const end = Math.min(value.length, safeOffset + safeLimit);
+  const text = value.slice(safeOffset, end);
+  const next = end < value.length ? end : undefined;
+  const metadata = `\n[content chars: ${value.length}, shown ${safeOffset}-${end}${next != null ? `, next offset:${next}` : ""}]` +
+    (next != null ? `\nUse ReadMcpResourceTool with offset:${next} limit:${safeLimit} for the next chunk.` : "");
+  return { text, metadata };
+}

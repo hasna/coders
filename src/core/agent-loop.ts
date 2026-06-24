@@ -31,6 +31,7 @@ import {
 } from "../api/index.js";
 import type { PermissionResult, ToolPermissionContext } from "../config/permissions.js";
 import { errorToString } from "./errors.js";
+import { DEFAULT_TEXT_LIMIT, compactJson, compactLongText } from "../utils/output.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -267,7 +268,11 @@ export async function runAgentLoop(
       content: toolResults.map((r) => ({
         type: "tool_result" as const,
         tool_use_id: r.toolUseId,
-        content: r.error ?? (typeof r.data === "string" ? r.data : JSON.stringify(r.data ?? "(no output)")),
+        content: compactLongText(
+          r.error ?? (typeof r.data === "string" ? r.data : compactJson(r.data ?? "(no output)", DEFAULT_TEXT_LIMIT * 3)),
+          DEFAULT_TEXT_LIMIT * 3,
+          "Tool output was compacted before returning to the model.",
+        ),
         is_error: r.isError,
       })),
     };

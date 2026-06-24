@@ -19,6 +19,7 @@ import { join } from "path";
 import { homedir } from "os";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
 import { DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
+import { DEFAULT_TEXT_LIMIT, compactLongText } from "../../utils/output.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -316,7 +317,11 @@ Use this tool when the user references a skill by name or uses a "/<skill-name>"
     return {
       type: "tool_result",
       tool_use_id: toolUseId,
-      content: `<command-name>${result.skill}</command-name>\n\n${result.prompt}`,
+      content: compactLongText(
+        `<command-name>${result.skill}</command-name>\n\n${result.prompt}`,
+        DEFAULT_TEXT_LIMIT * 3,
+        "Open the SKILL.md directly for the complete prompt if needed.",
+      ),
     };
   },
 };

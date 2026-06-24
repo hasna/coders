@@ -35,7 +35,7 @@ const GlobOutputSchema = z.object({
   truncated: z.boolean(),
 });
 
-const MAX_RESULTS = 500;
+const MAX_RESULTS = 100;
 
 // ── Glob Tool ──────────────────────────────────────────────────────
 
@@ -158,7 +158,7 @@ export const globTool: Tool<GlobInput, GlobOutput> = {
 
     let content = result.files.join("\n");
     if (result.truncated) {
-      content += `\n\n(showing ${result.files.length} of ${result.totalMatches} matches)`;
+      content += `\n\n(showing ${result.files.length} of ${result.totalMatches} matches; narrow the pattern or path for the rest)`;
     }
 
     return {
@@ -181,5 +181,6 @@ function resolvePath(p: string): string {
 const GLOB_PROMPT = `Fast file pattern matching tool that works with any codebase size.
 - Supports glob patterns like "**/*.js" or "src/**/*.ts"
 - Returns matching file paths sorted by modification time
+- Output is capped to the first 100 paths for compact agent context
 - Use this tool when you need to find files by name patterns
 - When doing open-ended search requiring multiple rounds, use the Agent tool instead`;

@@ -4,6 +4,7 @@
 import { z } from "zod";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
 import { WEB_FETCH_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
+import { DEFAULT_TEXT_LIMIT, compactLongText } from "../../utils/output.js";
 
 const WebFetchInputSchema = z.strictObject({
   url: z.string().url().describe("URL to fetch"),
@@ -96,7 +97,12 @@ export const webFetchTool: Tool<WebFetchInput, WebFetchOutput> = {
   },
 
   mapToolResultToToolResultBlockParam(result, toolUseId) {
-    return { type: "tool_result", tool_use_id: toolUseId, content: result.result.slice(0, DEFAULT_MAX_RESULT_SIZE_CHARS) };
+    const content = compactLongText(
+      result.result,
+      DEFAULT_TEXT_LIMIT,
+      "Use a more specific prompt or fetch a narrower URL for more focused content.",
+    );
+    return { type: "tool_result", tool_use_id: toolUseId, content };
   },
 };
 

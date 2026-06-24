@@ -8,6 +8,7 @@ import { join } from "path";
 import { execSync } from "child_process";
 import { dbAll, dbGet } from "../db/index.js";
 import { getCurrentSessionId, getSessionStartTime, listCheckpoints, loadLatestCheckpoint } from "./session.js";
+import { DEFAULT_TEXT_LIMIT, compactLongText, parseLimit, sliceWithLimit, truncateLine } from "../utils/output.js";
 
 export interface SlashCommand {
   name: string;
@@ -241,15 +242,18 @@ function registerDefaults(): void {
           // Fallback text view: /config --text
           const lines = Object.entries(settings)
             .filter(([, v]) => v !== undefined && v !== null)
-            .map(([k, v]) => `  ${k.padEnd(24)} ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
-          return { output: `Current settings:\n${lines.join("\n")}\n\nUse /config <key> <value> to change.` };
+            .slice(0, 20)
+            .map(([k, v]) => `  ${k.padEnd(24)} ${truncateLine(typeof v === "object" ? JSON.stringify(v) : String(v), 120)}`);
+          const total = Object.entries(settings).filter(([, v]) => v !== undefined && v !== null).length;
+          const hidden = total > 20 ? `\n${total - 20} more setting(s) hidden.` : "";
+          return { output: `Current settings (${Math.min(total, 20)}/${total}):\n${lines.join("\n")}${hidden}\n\nUse /config <key> for one setting or /config <key> <value> to change.` };
         }
 
         if (!value) {
           // Show single setting
           const val = (settings as any)[key];
           if (val === undefined) return { output: `Setting "${key}" is not set.` };
-          return { output: `${key} = ${typeof val === "object" ? JSON.stringify(val, null, 2) : String(val)}` };
+          return { output: `${key} = ${compactLongText(typeof val === "object" ? JSON.stringify(val, null, 2) : String(val), DEFAULT_TEXT_LIMIT, "Use the settings file for the full value.")}` };
         }
 
         // Validate key against known settings — prevent __proto__ and arbitrary writes
@@ -299,12 +303,14 @@ function registerDefaults(): void {
         const { loadMcpConfigsWithScope } = require("../mcp/config.js");
         const configs = loadMcpConfigsWithScope(process.cwd());
         if (configs.length === 0) return { output: "No MCP servers configured.\nUse /mcp add <name> <command> to add one." };
-        const lines = configs.map((c: any) => {
+        const visible = sliceWithLimit(configs, 20);
+        const lines = visible.items.map((c: any) => {
           const transport = c.transport ?? "stdio";
           const cmd = c.command ? `${c.command} ${(c.args ?? []).join(" ")}`.trim() : c.url ?? "—";
-          return `  ${c.name.padEnd(20)} ${c.scope.padEnd(8)} ${transport.padEnd(6)} ${cmd}`;
+          return `  ${truncateLine(c.name, 20).padEnd(20)} ${c.scope.padEnd(8)} ${transport.padEnd(6)} ${truncateLine(cmd, 96)}`;
         });
-        return { output: `MCP servers (${configs.length}):\n  ${"Name".padEnd(20)} ${"Scope".padEnd(8)} ${"Type".padEnd(6)} Command/URL\n${lines.join("\n")}\n\nUse /mcp add <name> <command> or /mcp remove <name>` };
+        const hidden = visible.hidden > 0 ? `\n  ... ${visible.hidden} more. Use coders mcp list --limit ${Math.min(configs.length, 40)} --verbose for details.` : "";
+        return { output: `MCP servers (${visible.items.length}/${configs.length}):\n  ${"Name".padEnd(20)} ${"Scope".padEnd(8)} ${"Type".padEnd(6)} Command/URL\n${lines.join("\n")}${hidden}\n\nUse coders mcp list --verbose or /mcp add <name> <command>.` };
       } catch (e) {
         return { output: `MCP error: ${e instanceof Error ? e.message : String(e)}` };
       }
@@ -362,14 +368,16 @@ function registerDefaults(): void {
         const { getAllTasks } = require("./background-tasks.js");
         const tasks = getAllTasks();
         if (tasks.length === 0) return { output: "No background tasks." };
-        const lines = tasks.map((t: any) => {
+        const visible = sliceWithLimit(tasks, 20);
+        const lines = visible.items.map((t: any) => {
           const elapsed = t.endTime
             ? `${((t.endTime - t.startTime) / 1000).toFixed(1)}s`
             : `${((Date.now() - t.startTime) / 1000).toFixed(1)}s`;
           const status = t.status === "running" ? "running" : t.status === "completed" ? "done" : t.status;
-          return `  ${t.id.padEnd(12)} ${status.padEnd(10)} ${elapsed.padEnd(8)} ${t.description}`;
+          return `  ${t.id.padEnd(12)} ${status.padEnd(10)} ${elapsed.padEnd(8)} ${truncateLine(t.description, 96)}`;
         });
-        return { output: `Background tasks:\n  ${"ID".padEnd(12)} ${"Status".padEnd(10)} ${"Time".padEnd(8)} Description\n${lines.join("\n")}` };
+        const hidden = visible.hidden > 0 ? `\n  ... ${visible.hidden} more. Use TaskList with a larger limit or TaskOutput <id> for details.` : "";
+        return { output: `Background tasks (${visible.items.length}/${tasks.length}):\n  ${"ID".padEnd(12)} ${"Status".padEnd(10)} ${"Time".padEnd(8)} Description\n${lines.join("\n")}${hidden}` };
       } catch {
         return { output: "No background tasks." };
       }
@@ -387,7 +395,7 @@ function registerDefaults(): void {
         if (staged) parts.push(`── Staged changes ──\n${staged}`);
         if (unstaged) parts.push(`── Unstaged changes ──\n${unstaged}`);
         if (parts.length === 0) return { output: "No uncommitted changes." };
-        return { output: parts.join("\n\n") };
+        return { output: compactLongText(parts.join("\n\n"), DEFAULT_TEXT_LIMIT * 3, "Use git diff directly or /review <file> for a narrower view.") };
       } catch (e) {
         return { output: `Failed to get diff: ${e instanceof Error ? e.message : String(e)}` };
       }
@@ -405,7 +413,7 @@ function registerDefaults(): void {
           if (!/^\d+$/.test(num)) return { output: `Invalid PR number: "${num}". Use /pr <number>.` };
           const { execFileSync: efs } = require("child_process");
           const out = (efs("gh", ["pr", "view", num, "--json", "title,state,url,author,body", "--template", "{{.title}} ({{.state}})\nAuthor: {{.author.login}}\nURL: {{.url}}\n\n{{.body}}"], { encoding: "utf-8", timeout: 15000 }) as string).trim();
-          return { output: out };
+          return { output: compactLongText(out, DEFAULT_TEXT_LIMIT * 2, "Use gh pr view directly for the full body.") };
         }
         // /pr — show PR for current branch
         const branch = execSync("git branch --show-current", { encoding: "utf-8", timeout: 5000 }).trim();
@@ -540,11 +548,13 @@ function registerDefaults(): void {
         const { discoverPlugins } = require("../plugins/loader.js");
         const plugins = discoverPlugins();
         if (plugins.length === 0) return { output: "No plugins installed.\nUse 'coders plugin install <name>' to add plugins." };
-        const lines = plugins.map((p: any) => {
+        const visible = sliceWithLimit(plugins, 20);
+        const lines = visible.items.map((p: any) => {
           const status = p.enabled ? "enabled" : "disabled";
-          return `  ${p.name.padEnd(24)} v${p.version?.padEnd(10) ?? "?".padEnd(10)} ${status.padEnd(10)} ${p.source ?? ""}`;
+          return `  ${truncateLine(p.name, 24).padEnd(24)} v${String(p.version ?? "?").padEnd(10)} ${status.padEnd(10)} ${truncateLine(p.source ?? "", 80)}`;
         });
-        return { output: `Installed plugins (${plugins.length}):\n  ${"Name".padEnd(24)} ${"Version".padEnd(11)} ${"Status".padEnd(10)} Source\n${lines.join("\n")}` };
+        const hidden = visible.hidden > 0 ? `\n  ... ${visible.hidden} more. Use coders plugin list --limit ${Math.min(plugins.length, 40)} --verbose for details.` : "";
+        return { output: `Installed plugins (${visible.items.length}/${plugins.length}):\n  ${"Name".padEnd(24)} ${"Version".padEnd(11)} ${"Status".padEnd(10)} Source\n${lines.join("\n")}${hidden}` };
       } catch (e) {
         return { output: `Plugin error: ${e instanceof Error ? e.message : String(e)}` };
       }
@@ -604,18 +614,20 @@ function registerDefaults(): void {
       }
 
       // Otherwise list checkpoints
-      const lines = checkpoints.map((cp, i) => {
+      const visible = sliceWithLimit(checkpoints, 20);
+      const lines = visible.items.map((cp, i) => {
         const op = cp.edit_operation ? JSON.parse(cp.edit_operation) : null;
         const summary = op?.old_string
           ? `"${truncate(op.old_string, 30)}" -> "${truncate(op.new_string, 30)}"`
           : op?.type === "write_overwrite"
             ? "file overwrite"
             : "unknown operation";
-        return `  ${i + 1}. [${cp.created_at}] ${cp.file_path}\n     ${summary}`;
+        return `  ${i + 1}. [${cp.created_at}] ${truncateLine(cp.file_path, 120)}\n     ${summary}`;
       });
+      const hidden = visible.hidden > 0 ? `\n  ... ${visible.hidden} more checkpoint(s) hidden.` : "";
 
       return {
-        output: `Recent checkpoints:\n${lines.join("\n")}\n\nUse /rewind <number> to restore a checkpoint.`,
+        output: `Recent checkpoints (${visible.items.length}/${checkpoints.length}):\n${lines.join("\n")}${hidden}\n\nUse /rewind <number> to restore a checkpoint.`,
       };
     },
   });
@@ -652,11 +664,13 @@ function registerDefaults(): void {
         if (checkpoints.length === 0) {
           return { output: "No checkpoints found. Use /checkpoint [label] to save one." };
         }
-        const lines = checkpoints.map((cp, i) => {
-          return `  ${i + 1}. [${cp.createdAt}] "${cp.label}" (${cp.messageCount} messages) id:${cp.id.slice(0, 8)}`;
+        const visible = sliceWithLimit(checkpoints, 20);
+        const lines = visible.items.map((cp, i) => {
+          return `  ${i + 1}. [${cp.createdAt}] "${truncateLine(cp.label, 50)}" (${cp.messageCount} messages) id:${cp.id.slice(0, 8)}`;
         });
+        const hidden = visible.hidden > 0 ? `\n  ... ${visible.hidden} more checkpoint(s) hidden.` : "";
         return {
-          output: `Conversation checkpoints:\n${lines.join("\n")}\n\nUse /restore latest or /restore <number> or /restore <id-prefix>`,
+          output: `Conversation checkpoints (${visible.items.length}/${checkpoints.length}):\n${lines.join("\n")}${hidden}\n\nUse /restore latest or /restore <number> or /restore <id-prefix>`,
         };
       }
 
@@ -785,10 +799,14 @@ function registerDefaults(): void {
         }
         const parts: string[] = [];
         if (filesRead.size > 0) {
-          parts.push(`Files read (${filesRead.size}):\n${Array.from(filesRead).map(f => `  ${f}`).join("\n")}`);
+          const read = sliceWithLimit(Array.from(filesRead), 20);
+          const hidden = read.hidden > 0 ? `\n  ... ${read.hidden} more` : "";
+          parts.push(`Files read (${read.items.length}/${filesRead.size}):\n${read.items.map(f => `  ${truncateLine(f, 120)}`).join("\n")}${hidden}`);
         }
         if (filesWritten.size > 0) {
-          parts.push(`Files written (${filesWritten.size}):\n${Array.from(filesWritten).map(f => `  ${f}`).join("\n")}`);
+          const written = sliceWithLimit(Array.from(filesWritten), 20);
+          const hidden = written.hidden > 0 ? `\n  ... ${written.hidden} more` : "";
+          parts.push(`Files written (${written.items.length}/${filesWritten.size}):\n${written.items.map(f => `  ${truncateLine(f, 120)}`).join("\n")}${hidden}`);
         }
         if (parts.length === 0) return { output: "No files tracked in this session." };
         return { output: parts.join("\n\n") };
@@ -947,7 +965,7 @@ function registerDefaults(): void {
         return { action: "sessionsPicker" };
       }
       try {
-        const limit = parseInt(args.trim(), 10) || 20;
+        const limit = parseLimit(args.trim(), 20, 100);
         const sessions = dbAll<any>(
           `SELECT s.id, s.model, s.created_at, s.project_dir,
                   COUNT(m.id) AS msg_count,
@@ -962,7 +980,7 @@ function registerDefaults(): void {
         if (sessions.length === 0) return { output: "No sessions found." };
 
         const currentId = getCurrentSessionId();
-        const lines = [`Sessions (${sessions.length}, most recent first):`,
+        const lines = [`Sessions (${sessions.length}, most recent first; use /sessions <limit> to adjust):`,
           `  ${"#".padEnd(4)} ${"Date".padEnd(20)} ${"Model".padEnd(10)} ${"Msgs".padEnd(6)} ${"Tokens".padEnd(10)} ${"Cost".padEnd(8)} ID`,
           `  ${"─".repeat(70)}`,
         ];
@@ -1033,11 +1051,13 @@ function registerDefaults(): void {
         const hookConfig = settings.hooks ?? {};
         const entries = Object.entries(hookConfig);
         if (entries.length === 0) return { output: `No hooks configured (${getRegisteredHookCount()} registered).\nAdd hooks in settings.json under "hooks".` };
-        const lines = entries.map(([event, cmds]: [string, any]) => {
+        const visible = sliceWithLimit(entries, 20);
+        const lines = visible.items.map(([event, cmds]: [string, any]) => {
           const cmdList = Array.isArray(cmds) ? cmds : [];
-          return `  ${event.padEnd(20)} ${cmdList.length} command${cmdList.length !== 1 ? "s" : ""}`;
+          return `  ${truncateLine(event, 20).padEnd(20)} ${cmdList.length} command${cmdList.length !== 1 ? "s" : ""}`;
         });
-        return { output: `Active hooks (${getRegisteredHookCount()} registered):\n${lines.join("\n")}` };
+        const hidden = visible.hidden > 0 ? `\n  ... ${visible.hidden} more hook event(s) hidden.` : "";
+        return { output: `Active hooks (${visible.items.length}/${entries.length}; ${getRegisteredHookCount()} registered):\n${lines.join("\n")}${hidden}` };
       } catch (e) {
         return { output: `Error: ${e instanceof Error ? e.message : String(e)}` };
       }
@@ -1052,12 +1072,14 @@ function registerDefaults(): void {
         const { getAllRunningAgents } = require("../tools/builtin/agent.js");
         const agents = getAllRunningAgents();
         if (agents.length === 0) return { output: "No agents running. Use the Agent tool to spawn sub-agents." };
-        const lines = agents.map((a: any) => {
+        const visible = sliceWithLimit(agents, 20);
+        const lines = visible.items.map((a: any) => {
           const status = a.status === "running" ? "⠙ running" : a.status === "completed" ? "● done" : "✗ failed";
-          const result = a.result ? ` — ${a.result.slice(0, 60)}` : "";
-          return `  ${a.id.slice(0, 8)} ${a.type.padEnd(10)} ${status}${result}`;
+          const result = a.result ? ` — ${truncateLine(a.result, 80)}` : "";
+          return `  ${a.id.slice(0, 8)} ${truncateLine(a.type, 10).padEnd(10)} ${status}${result}`;
         });
-        return { output: `Agents (${agents.length}):\n${lines.join("\n")}` };
+        const hidden = visible.hidden > 0 ? `\n  ... ${visible.hidden} more. Use TaskList or TaskOutput for details.` : "";
+        return { output: `Agents (${visible.items.length}/${agents.length}):\n${lines.join("\n")}${hidden}` };
       } catch {
         return { output: "No agents running." };
       }
@@ -1192,6 +1214,7 @@ function registerDefaults(): void {
           for (const rule of deny.slice(0, 10)) {
             lines.push(`    ${rule.toolName ?? "*"} ${rule.command ? `cmd:${rule.command}` : ""} ${rule.path ? `path:${rule.path}` : ""}`);
           }
+          if (deny.length > 10) lines.push(`    ... +${deny.length - 10} more`);
         } else {
           lines.push("  Deny:     (none)");
         }

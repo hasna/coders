@@ -15,6 +15,7 @@
 import { z } from "zod";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../tools/interface.js";
 import { DEFAULT_MAX_RESULT_SIZE_CHARS } from "../core/constants.js";
+import { DEFAULT_TEXT_LIMIT, compactJson, compactLongText } from "../utils/output.js";
 
 // ── Connector types ────────────────────────────────────────────────
 
@@ -220,10 +221,16 @@ function createConnectorTool(
     },
 
     mapToolResultToToolResultBlockParam(result: unknown, toolUseId: string): ToolResultBlockParam {
+      const rawContent = typeof result === "string" ? result : compactJson(result, DEFAULT_TEXT_LIMIT * 2);
+      const content = compactLongText(
+        rawContent,
+        DEFAULT_TEXT_LIMIT * 2,
+        "Use connector filters, pagination, or a narrower request for more detail.",
+      );
       return {
         type: "tool_result",
         tool_use_id: toolUseId,
-        content: typeof result === "string" ? result : JSON.stringify(result, null, 2),
+        content,
       };
     },
   };

@@ -16,6 +16,7 @@ import { z } from "zod";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../tools/interface.js";
 import { registerMcpTool, unregisterMcpTool } from "../tools/registry.js";
 import { DEFAULT_MAX_RESULT_SIZE_CHARS } from "../core/constants.js";
+import { DEFAULT_TEXT_LIMIT, compactJson, compactLongText } from "../utils/output.js";
 
 // ── MCP Server Config ──────────────────────────────────────────────
 
@@ -274,10 +275,16 @@ function wrapMcpTool(serverName: string, mcpTool: McpToolDef, client: Client): T
     },
 
     mapToolResultToToolResultBlockParam(result: any, toolUseId: string): ToolResultBlockParam {
+      const rawContent = result.content ?? compactJson(result, DEFAULT_TEXT_LIMIT * 2);
+      const content = compactLongText(
+        rawContent,
+        DEFAULT_TEXT_LIMIT * 2,
+        "Use remote tool filters, pagination, or a narrower request for more detail.",
+      );
       return {
         type: "tool_result",
         tool_use_id: toolUseId,
-        content: result.content ?? JSON.stringify(result),
+        content,
         is_error: result.isError,
       };
     },

@@ -18,6 +18,7 @@ import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js
 import { EDIT_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 import { hasFileBeenRead, markFileAsRead } from "./read.js";
 import { dbRun } from "../../db/index.js";
+import { DEFAULT_TEXT_LIMIT, compactLongText } from "../../utils/output.js";
 
 // ── Schemas ────────────────────────────────────────────────────────
 
@@ -229,7 +230,7 @@ export const editTool: Tool<EditInput, EditOutput> = {
     return {
       type: "tool_result",
       tool_use_id: toolUseId,
-      content,
+      content: compactLongText(content, DEFAULT_TEXT_LIMIT * 2, "Use git diff for the full patch."),
     };
   },
 };

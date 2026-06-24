@@ -19,6 +19,7 @@ import { removeKeychainApiKey as _removeKeychainApiKey } from "../auth/keychain.
 import { loadMcpConfigs, loadMcpConfigsWithScope, addMcpServerConfig, removeMcpServerConfig } from "../mcp/config.js";
 import type { McpConfigScope } from "../mcp/config.js";
 import { loadPlugins, discoverPlugins } from "../plugins/loader.js";
+import { parseLimit, sliceWithLimit, truncateLine } from "../utils/output.js";
 import { execSync } from "child_process";
 import { existsSync } from "fs";
 
@@ -321,6 +322,8 @@ export async function main(): Promise<void> {
   mcp.command("list")
     .description("List configured MCP servers")
     .option("--json", "Output as JSON")
+    .option("--verbose", "Show full endpoint values")
+    .option("--limit <count>", "Maximum rows to show in human output", "20")
     .action(async (options) => {
       const projectRoot = process.cwd();
       const configs = loadMcpConfigsWithScope(projectRoot);
@@ -336,9 +339,11 @@ export async function main(): Promise<void> {
       }
 
       // Tabular display
-      const nameWidth = Math.max(4, ...configs.map(c => c.name.length));
-      const transportWidth = Math.max(9, ...configs.map(c => c.transport.length));
-      const scopeWidth = Math.max(5, ...configs.map(c => c.scope.length));
+      const limit = parseLimit(options.limit);
+      const { items: visibleConfigs, hidden } = sliceWithLimit(configs, limit);
+      const nameWidth = Math.max(4, ...visibleConfigs.map(c => c.name.length));
+      const transportWidth = Math.max(9, ...visibleConfigs.map(c => c.transport.length));
+      const scopeWidth = Math.max(5, ...visibleConfigs.map(c => c.scope.length));
 
       const header = `${"Name".padEnd(nameWidth)}  ${"Transport".padEnd(transportWidth)}  ${"Scope".padEnd(scopeWidth)}  Source`;
       const separator = "-".repeat(header.length + 10);
@@ -346,16 +351,23 @@ export async function main(): Promise<void> {
       console.log(header);
       console.log(separator);
 
-      for (const config of configs) {
-        const endpoint = config.command
+      for (const config of visibleConfigs) {
+        const endpointRaw = config.command
           ? `${config.command}${config.args?.length ? " " + config.args.join(" ") : ""}`
           : config.url ?? "";
+        const endpoint = options.verbose ? endpointRaw : truncateLine(endpointRaw, 96);
         console.log(
           `${config.name.padEnd(nameWidth)}  ${config.transport.padEnd(transportWidth)}  ${config.scope.padEnd(scopeWidth)}  ${endpoint}`,
         );
       }
 
       console.log(`\n${configs.length} server(s) configured`);
+      if (hidden > 0 || !options.verbose) {
+        const hints = [];
+        if (hidden > 0) hints.push(`showing ${visibleConfigs.length} of ${configs.length}; use --limit ${Math.min(configs.length, limit * 2)} or --json for more`);
+        if (!options.verbose) hints.push("use --verbose for full endpoint values");
+        console.log(`Hint: ${hints.join("; ")}`);
+      }
     });
 
   mcp.command("get <name>")
@@ -604,11 +616,14 @@ export async function main(): Promise<void> {
     .description("List installed plugins")
     .option("--json", "Output as JSON")
     .option("--builtin", "Include built-in plugins")
+    .option("--verbose", "Show full source and built-in descriptions")
+    .option("--limit <count>", "Maximum rows to show in human output", "20")
     .action(async (options) => {
       const { discoverPlugins: discover, BUILTIN_PLUGINS } = await import("../plugins/loader.js");
 
       const installed = discover();
       const showBuiltin = options.builtin ?? false;
+      const limit = parseLimit(options.limit);
 
       if (options.json) {
         const result: Record<string, unknown> = { installed };
@@ -626,19 +641,27 @@ export async function main(): Promise<void> {
       }
 
       if (installed.length > 0) {
-        const nameWidth = Math.max(4, ...installed.map(p => p.name.length));
-        const versionWidth = Math.max(7, ...installed.map(p => p.version.length));
+        const { items: visiblePlugins, hidden } = sliceWithLimit(installed, limit);
+        const nameWidth = Math.max(4, ...visiblePlugins.map(p => p.name.length));
+        const versionWidth = Math.max(7, ...visiblePlugins.map(p => p.version.length));
 
         console.log(`${"Name".padEnd(nameWidth)}  ${"Version".padEnd(versionWidth)}  Status   Source`);
         console.log("-".repeat(nameWidth + versionWidth + 25));
 
-        for (const p of installed) {
+        for (const p of visiblePlugins) {
           const status = p.enabled ? "enabled" : "disabled";
+          const source = options.verbose ? p.source : truncateLine(p.source, 80);
           console.log(
-            `${p.name.padEnd(nameWidth)}  ${p.version.padEnd(versionWidth)}  ${status.padEnd(8)} ${p.source}`,
+            `${p.name.padEnd(nameWidth)}  ${p.version.padEnd(versionWidth)}  ${status.padEnd(8)} ${source}`,
           );
         }
         console.log(`\n${installed.length} plugin(s) installed`);
+        if (hidden > 0 || !options.verbose) {
+          const hints = [];
+          if (hidden > 0) hints.push(`showing ${visiblePlugins.length} of ${installed.length}; use --limit ${Math.min(installed.length, limit * 2)} or --json for more`);
+          if (!options.verbose) hints.push("use --verbose for full source values");
+          console.log(`Hint: ${hints.join("; ")}`);
+        }
       } else {
         console.log("No user plugins installed.");
       }
@@ -646,8 +669,16 @@ export async function main(): Promise<void> {
       if (showBuiltin && BUILTIN_PLUGINS.length > 0) {
         console.log("");
         console.log("Built-in plugins:");
-        for (const bp of BUILTIN_PLUGINS) {
-          console.log(`  ${bp.name} v${bp.version} — ${bp.description ?? ""}`);
+        const { items: visibleBuiltin, hidden } = sliceWithLimit(BUILTIN_PLUGINS, limit);
+        for (const bp of visibleBuiltin) {
+          const description = options.verbose ? bp.description ?? "" : truncateLine(bp.description ?? "", 96);
+          console.log(`  ${bp.name} v${bp.version} — ${description}`);
+        }
+        if (hidden > 0 || !options.verbose) {
+          const hints = [];
+          if (hidden > 0) hints.push(`showing ${visibleBuiltin.length} of ${BUILTIN_PLUGINS.length}; use --limit ${Math.min(BUILTIN_PLUGINS.length, limit * 2)} or --json for more`);
+          if (!options.verbose) hints.push("use --verbose for full built-in descriptions");
+          console.log(`Hint: ${hints.join("; ")}`);
         }
       }
     });
@@ -915,12 +946,14 @@ export async function main(): Promise<void> {
         const mcpConfigs = loadMcpConfigsWithScope(process.cwd());
         if (mcpConfigs.length > 0) {
           console.log(`  ${ok} MCP servers: ${mcpConfigs.length} configured`);
-          for (const cfg of mcpConfigs) {
+          const { items: visibleMcpConfigs, hidden } = sliceWithLimit(mcpConfigs, 5);
+          for (const cfg of visibleMcpConfigs) {
             const endpoint = cfg.command
               ? `${cfg.command}${cfg.args?.length ? " " + cfg.args.join(" ") : ""}`
               : cfg.url ?? "";
-            console.log(`       - ${cfg.name} (${cfg.scope}) ${endpoint}`);
+            console.log(`       - ${cfg.name} (${cfg.scope}) ${truncateLine(endpoint, 80)}`);
           }
+          if (hidden > 0) console.log(`       ... ${hidden} more; run coders mcp list --limit ${mcpConfigs.length} --verbose for details`);
         } else {
           console.log(`  ${ok} MCP servers: none configured`);
         }
@@ -946,9 +979,11 @@ export async function main(): Promise<void> {
           const discovered = discoverPlugins();
           if (discovered.length > 0) {
             console.log(`  ${ok} Plugins: ${discovered.length} installed`);
-            for (const p of discovered) {
+            const { items: visiblePlugins, hidden } = sliceWithLimit(discovered, 5);
+            for (const p of visiblePlugins) {
               console.log(`       - ${p.name} v${p.version}${p.enabled ? "" : " (disabled)"}`);
             }
+            if (hidden > 0) console.log(`       ... ${hidden} more; run coders plugin list --limit ${discovered.length} --verbose for details`);
           } else {
             console.log(`  ${ok} Plugins: none installed (${pluginsDir})`);
           }

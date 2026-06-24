@@ -8,6 +8,7 @@
 import { z } from "zod";
 import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
 import { LSP_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
+import { DEFAULT_TEXT_LIMIT, compactLongText } from "../../utils/output.js";
 
 const LSPOperations = [
   "goToDefinition", "findReferences", "hover", "documentSymbol",
@@ -73,7 +74,11 @@ export const lspTool: Tool<LSPInput, LSPOutput> = {
   },
 
   mapToolResultToToolResultBlockParam(result, toolUseId) {
-    return { type: "tool_result", tool_use_id: toolUseId, content: result.result };
+    return {
+      type: "tool_result",
+      tool_use_id: toolUseId,
+      content: compactLongText(result.result, DEFAULT_TEXT_LIMIT * 2, "Use a narrower symbol/file query for more focused LSP output."),
+    };
   },
 };
 

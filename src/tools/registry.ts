@@ -209,7 +209,7 @@ export function searchDeferredToolSchemas(query: string, maxResults = 5): Deferr
 
   // Support "select:Name1,Name2" syntax for exact name lookup
   if (queryLower.startsWith("select:")) {
-    const names = query.slice(7).split(",").map(n => n.trim());
+    const names = query.slice(7).split(",").map(n => n.trim()).slice(0, maxResults);
     return names
       .map(n => deferredToolSchemas.get(n))
       .filter((s): s is DeferredToolSchema => s !== undefined);

@@ -55,6 +55,42 @@ describe("Task tools", () => {
     await taskCreateTool.call({ subject: "B", description: "b" }, mockContext);
     const result = await taskListTool.call({} as any, mockContext);
     expect(result.data.tasks.length).toBe(2);
+    expect(result.data.totalCount).toBe(2);
+    expect(result.data.hiddenCount).toBe(0);
+  });
+
+  it("caps TaskList output by default and points to details", async () => {
+    for (let i = 0; i < 25; i++) {
+      await taskCreateTool.call({ subject: `Task ${i}`, description: "x".repeat(240) }, mockContext);
+    }
+
+    const result = await taskListTool.call({} as any, mockContext);
+    expect(result.data.tasks.length).toBe(25);
+    expect(result.data.totalCount).toBe(25);
+    expect(result.data.hiddenCount).toBe(5);
+
+    const block = taskListTool.mapToolResultToToolResultBlockParam(result.data, "t-list");
+    expect(block.content).toContain("Tasks (20/25, showing 20)");
+    expect(block.content).toContain("5 more task(s) hidden");
+    expect(block.content).toContain("offset:20");
+    expect(block.content).toContain("TaskGet");
+    expect(block.content).not.toContain("x".repeat(180));
+  });
+
+  it("renders TaskList pages without dropping structured tasks", async () => {
+    for (let i = 0; i < 25; i++) {
+      await taskCreateTool.call({ subject: `Task ${i}`, description: "desc" }, mockContext);
+    }
+
+    const result = await taskListTool.call({ offset: 20, limit: 10 } as any, mockContext);
+    expect(result.data.tasks.length).toBe(25);
+    expect(result.data.hiddenCount).toBe(0);
+    expect(result.data.hasMore).toBe(false);
+
+    const block = taskListTool.mapToolResultToToolResultBlockParam(result.data, "t-list");
+    expect(block.content).toContain("Tasks (25/25, showing 5)");
+    expect(block.content).toContain("Task 20");
+    expect(block.content).not.toContain("Task 19");
   });
 
   it("updates task status", async () => {
@@ -95,7 +131,7 @@ describe("Task tools", () => {
 
   it("maps TaskList empty result", () => {
     const block = taskListTool.mapToolResultToToolResultBlockParam(
-      { tasks: [] }, "t2",
+      { tasks: [], totalCount: 0, hiddenCount: 0, limit: 20 }, "t2",
     );
     expect(block.content).toContain("No tasks");
   });
