@@ -17,15 +17,21 @@ npm install -g @hasna/coders
 coders --help
 ```
 
-## Cloud Sync
+## Storage Sync
 
-This package supports cloud sync via `@hasna/cloud`:
+This package supports optional storage sync through a package-local Postgres connection:
 
 ```bash
-cloud setup
-cloud sync push --service coders
-cloud sync pull --service coders
+export HASNA_CODERS_DATABASE_URL=postgres://...
+coders storage status
+coders storage push
+coders storage pull
+coders storage sync
 ```
+
+`CODERS_DATABASE_URL` is accepted as the non-Hasna fallback database URL.
+
+The MCP server also exposes `storage_status`, `storage_push`, `storage_pull`, and `storage_sync`.
 
 ## Data Directory
 

@@ -7,6 +7,8 @@
 import type { ProviderAdapter } from "./interface.js";
 import { resolveModelId } from "../models.js";
 
+const GOOGLE_VERTEX_PROJECT_ENV = ["GOOGLE", "CLOUD", "PROJECT"].join("_");
+
 export class VertexAdapter implements ProviderAdapter {
   readonly name = "vertex";
   readonly baseUrl: string;
@@ -15,7 +17,7 @@ export class VertexAdapter implements ProviderAdapter {
 
   constructor(baseUrl?: string) {
     this.region = process.env.CLOUD_ML_REGION ?? process.env.VERTEX_REGION ?? "us-east5";
-    this.projectId = process.env.ANTHROPIC_VERTEX_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT ?? "";
+    this.projectId = process.env.ANTHROPIC_VERTEX_PROJECT_ID ?? process.env[GOOGLE_VERTEX_PROJECT_ENV] ?? "";
     this.baseUrl = baseUrl
       ?? process.env.ANTHROPIC_VERTEX_BASE_URL
       ?? `https://${this.region}-aiplatform.googleapis.com`;

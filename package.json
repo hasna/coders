@@ -1,13 +1,16 @@
 {
   "name": "@hasna/coders",
-  "version": "0.2.3",
+  "version": "0.2.7",
   "description": "Open-source coding agent CLI with native @hasna/* ecosystem integration",
   "type": "module",
   "bin": {
     "coders": "./dist/cli.js"
   },
+  "exports": {
+    "./storage": "./dist/storage.js"
+  },
   "scripts": {
-    "build": "tsx esbuild.config.ts",
+    "build": "rm -rf dist/ && tsx esbuild.config.ts",
     "dev": "tsx src/cli/index.ts",
     "start": "node dist/cli.js",
     "test": "vitest run",
@@ -25,6 +28,8 @@
     "dist/cli.js",
     "dist/cli.mjs",
     "dist/cli.mjs.map",
+    "dist/storage.js",
+    "dist/storage.js.map",
     "vendor/",
     "LICENSE",
     "README.md"
@@ -50,7 +55,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
-    "@hasna/cloud": "^0.1.24",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "axios": "1.13.6",
     "better-sqlite3": "^12.8.0",
@@ -59,12 +63,15 @@
     "fast-glob": "^3.3.0",
     "ink": "^5.1.0",
     "marked": "^15.0.0",
+    "pg": "^8.13.3",
     "react": "^18.3.0",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0",
+    "@hasna/events": "^0.1.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.11",
     "@types/react": "^18.3.0",
     "esbuild": "^0.25.0",
     "react-devtools-core": "^7.0.1",
@@ -84,7 +91,6 @@
     "@hasna/recordings": "*",
     "@hasna/sandboxes": "*",
     "@hasna/economy": "*",
-    "@hasna/wallets": "*",
     "@hasna/brains": "*",
     "@hasna/attachments": "*"
   }

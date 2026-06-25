@@ -20,18 +20,30 @@ export interface IntegrationStatus {
 class HasnaIntegration {
   readonly name: string;
   readonly packageName: string;
+  private readonly envVar?: string;
   private client: Record<string, Function> | null = null;
   private _available: boolean | null = null;
 
-  constructor(name: string, packageName: string) {
+  constructor(name: string, packageName: string, envVar?: string) {
     this.name = name;
     this.packageName = packageName;
+    this.envVar = envVar;
+  }
+
+  private get moduleName(): string | null {
+    if (!this.envVar) return this.packageName;
+    return process.env[this.envVar]?.trim() || null;
   }
 
   get available(): boolean {
     if (this._available !== null) return this._available;
     try {
-      const mod = require(this.packageName);
+      const moduleName = this.moduleName;
+      if (!moduleName) {
+        this._available = false;
+        return this._available;
+      }
+      const mod = require(moduleName);
       if (mod && typeof mod.createClient === "function") {
         this.client = mod.createClient();
         this._available = true;
@@ -49,6 +61,12 @@ class HasnaIntegration {
 
   async call(method: string, params?: Record<string, unknown>): Promise<unknown> {
     if (!this.available || !this.client) {
+      if (this.envVar && !this.moduleName) {
+        return {
+          error: `${this.name} integration not configured. Set ${this.envVar} to a module name.`,
+          available: false,
+        };
+      }
       return { error: `${this.packageName} not installed`, available: false };
     }
     const fn = this.client[method];
@@ -71,8 +89,8 @@ class HasnaIntegration {
 
 const integrations = new Map<string, HasnaIntegration>();
 
-function register(name: string, pkg: string): void {
-  integrations.set(name, new HasnaIntegration(name, pkg));
+function register(name: string, pkg: string, envVar?: string): void {
+  integrations.set(name, new HasnaIntegration(name, pkg, envVar));
 }
 
 // Register all @hasna/* packages
@@ -83,7 +101,7 @@ register("prompts", "@hasna/prompts");
 register("recordings", "@hasna/recordings");
 register("sandboxes", "@hasna/sandboxes");
 register("economy", "@hasna/economy");
-register("wallets", "@hasna/wallets");
+register("wallets", "$CODERS_WALLET_MODULE", "CODERS_WALLET_MODULE");
 register("brains", "@hasna/brains");
 register("attachments", "@hasna/attachments");
 

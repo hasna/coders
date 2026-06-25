@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-coders cloud sync.
+ * PostgreSQL migrations for open-coders storage sync.
  *
  * Equivalent of the SQLite schema in index.ts, translated for PostgreSQL.
  * Each element is a standalone SQL string that must be executed in order.

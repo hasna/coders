@@ -1,7 +1,7 @@
 /**
  * SQLite database layer — single DB for all app storage
  *
- * Uses Bun's native bun:sqlite for zero-dependency SQLite.
+ * Uses Bun's native bun:sqlite when running under Bun.
  * Falls back to better-sqlite3 for Node.js compatibility.
  *
  * DB location: ~/.coders/coders.db
@@ -16,7 +16,9 @@ import { join } from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { getConfigDir } from "../config/paths.js";
-import { SqliteAdapter } from "@hasna/cloud";
+import { createRequire } from "module";
+
+const runtimeRequire = createRequire(import.meta.url);
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -28,7 +30,13 @@ export interface DbRow {
 
 let _db: any = null;
 
-function getDbPath(): string {
+export function getDbPath(): string {
+  if (process.env["CODERS_DB_PATH"]) {
+    const overridePath = process.env["CODERS_DB_PATH"];
+    mkdirSync(join(overridePath, ".."), { recursive: true });
+    return overridePath;
+  }
+
   // New path: ~/.hasna/coders/
   const home = homedir();
   const newDir = join(home, ".hasna", "coders");
@@ -49,7 +57,6 @@ function getDbPath(): string {
 
 /**
  * Get the database instance. Creates and initializes on first call.
- * Uses SqliteAdapter from @hasna/cloud for cloud-ready SQLite.
  */
 export function getDb(): any {
   if (_db) return _db;
@@ -57,23 +64,17 @@ export function getDb(): any {
   const dbPath = getDbPath();
 
   try {
-    _db = new SqliteAdapter(dbPath) as any;
+    const { Database } = runtimeRequire("bun:sqlite");
+    _db = new Database(dbPath);
   } catch {
     try {
-      // Try Bun's native sqlite first
-      const { Database } = require("bun:sqlite");
-      _db = new Database(dbPath);
+      const BetterSqlite3 = runtimeRequire("better-sqlite3");
+      _db = new BetterSqlite3(dbPath);
     } catch {
-      try {
-        // Fallback to better-sqlite3 for Node.js
-        const BetterSqlite3 = require("better-sqlite3");
-        _db = new BetterSqlite3(dbPath);
-      } catch {
-        // Last resort: silent JSON-file storage (no user-visible output)
-        _db = createJsonFileDb();
-        initSchema(_db);
-        return _db;
-      }
+      // Last resort: silent JSON-file storage (no user-visible output)
+      _db = createJsonFileDb();
+      initSchema(_db);
+      return _db;
     }
   }
 

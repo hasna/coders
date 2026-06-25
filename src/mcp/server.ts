@@ -17,9 +17,22 @@ import {
 import { VERSION } from "../cli/index.js";
 import { getEnabledTools, getTool } from "../tools/registry.js";
 import { getDb } from "../db/index.js";
+import {
+  getStorageStatus,
+  storagePull,
+  storagePush,
+  storageSync,
+} from "../db/storage-sync.js";
 
 // ── Agent registry (in-memory) ─────────────────────────────────────
 const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>();
+
+function readStorageTables(args: unknown): string[] | undefined {
+  const value = (args as { tables?: string[] | string } | undefined)?.tables;
+  if (!value) return undefined;
+  if (Array.isArray(value)) return value;
+  return value.split(",").map((table) => table.trim()).filter(Boolean);
+}
 
 // ── Server creation ────────────────────────────────────────────────
 
@@ -70,6 +83,10 @@ export async function createMcpServer(options: McpServerOptions = {}): Promise<S
       { name: "set_focus", description: "Set active project context for this agent session.", inputSchema: { type: "object", properties: { agent_id: { type: "string" }, project_id: { type: "string" } }, required: ["agent_id"] } },
       { name: "list_agents", description: "List all registered agents.", inputSchema: { type: "object", properties: {} } },
       { name: "send_feedback", description: "Send feedback about this service", inputSchema: { type: "object", properties: { message: { type: "string" }, email: { type: "string" }, category: { type: "string", enum: ["bug", "feature", "general"] } }, required: ["message"] } },
+      { name: "storage_status", description: "Show coders storage sync configuration and local sync history.", inputSchema: { type: "object", properties: {} } },
+      { name: "storage_push", description: "Push local coders data to storage PostgreSQL.", inputSchema: { type: "object", properties: { tables: { type: "array", items: { type: "string" } } } } },
+      { name: "storage_pull", description: "Pull coders data from storage PostgreSQL to local SQLite.", inputSchema: { type: "object", properties: { tables: { type: "array", items: { type: "string" } } } } },
+      { name: "storage_sync", description: "Bidirectional coders sync: pull then push.", inputSchema: { type: "object", properties: { tables: { type: "array", items: { type: "string" } } } } },
     );
 
     return { tools: mcpTools };
@@ -119,6 +136,26 @@ export async function createMcpServer(options: McpServerOptions = {}): Promise<S
       } catch (e) {
         return { content: [{ type: "text", text: String(e) }], isError: true };
       }
+    }
+    if (name === "storage_status") {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(getStorageStatus(), null, 2),
+        }],
+      };
+    }
+    if (name === "storage_push") {
+      const tables = readStorageTables(args);
+      return { content: [{ type: "text", text: JSON.stringify(await storagePush(tables ? { tables } : undefined), null, 2) }] };
+    }
+    if (name === "storage_pull") {
+      const tables = readStorageTables(args);
+      return { content: [{ type: "text", text: JSON.stringify(await storagePull(tables ? { tables } : undefined), null, 2) }] };
+    }
+    if (name === "storage_sync") {
+      const tables = readStorageTables(args);
+      return { content: [{ type: "text", text: JSON.stringify(await storageSync(tables ? { tables } : undefined), null, 2) }] };
     }
 
     const tool = getTool(name);

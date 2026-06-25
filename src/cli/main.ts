@@ -6,6 +6,7 @@
  * and the preAction hook that initializes configs/auth/plugins.
  */
 import { Command, Option } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import { VERSION, BUILD_TIME, PACKAGE_NAME, profileCheckpoint } from "./index.js";
 import { resolveOptions } from "./args.js";
 import { setProjectRoot, getSettings, getUserSettings, getProjectSettings, saveUserSettings, getConfig, saveConfig } from "../config/loader.js";
@@ -18,6 +19,7 @@ import { removeKeychainApiKey as _removeKeychainApiKey } from "../auth/keychain.
 import { loadMcpConfigs, loadMcpConfigsWithScope, addMcpServerConfig, removeMcpServerConfig } from "../mcp/config.js";
 import type { McpConfigScope } from "../mcp/config.js";
 import { loadPlugins, discoverPlugins } from "../plugins/loader.js";
+import { registerStorageCommands } from "./storage.js";
 import { execSync } from "child_process";
 import { existsSync } from "fs";
 
@@ -830,6 +832,8 @@ export async function main(): Promise<void> {
       }
     });
 
+  registerStorageCommands(program);
+
   // ── Subcommand: doctor ───────────────────────────────────────────
 
   program.command("doctor")
@@ -1098,6 +1102,8 @@ export async function main(): Promise<void> {
   // ── Parse ────────────────────────────────────────────────────────
 
   profileCheckpoint("run_before_parse");
+registerEventsCommands(program, { source: "coders" });
+
   await program.parseAsync(process.argv);
   profileCheckpoint("run_after_parse");
 }
