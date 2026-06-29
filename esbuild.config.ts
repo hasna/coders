@@ -10,6 +10,9 @@ const shared = {
   format: "esm" as const,
   sourcemap: true,
   minify: process.env.NODE_ENV === "production",
+  banner: {
+    js: 'import { createRequire as __codersCreateRequire } from "node:module"; const require = __codersCreateRequire(import.meta.url);',
+  },
   external: [
     "node:*",
     "fs",
@@ -72,11 +75,11 @@ await build({
   outfile: "dist/coders-mcp.mjs",
 });
 
-writeFileSync("dist/cli.js", `#!/usr/bin/env bun
+writeFileSync("dist/cli.js", `#!/usr/bin/env node
 import { runCli } from "./cli.mjs";
 runCli();
 `);
-writeFileSync("dist/coders-mcp.js", `#!/usr/bin/env bun
+writeFileSync("dist/coders-mcp.js", `#!/usr/bin/env node
 import "./coders-mcp.mjs";
 `);
 chmodSync("dist/cli.js", 0o755);

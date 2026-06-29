@@ -63,8 +63,19 @@ describe("CLI Integration", () => {
   });
 
   it("auth status works", () => {
-    const out = runCLI("auth status");
+    const out = runCLI("auth status", { env: { ANTHROPIC_API_KEY: "", CODERS_OAUTH_TOKEN: "" } });
     expect(out).toContain("Authentication Status");
+    expect(out).toContain("Status:    Not authenticated");
+  });
+
+  it("auth status --json reports resolved authentication shape", () => {
+    const out = runCLI("auth status --json", { env: { ANTHROPIC_API_KEY: "sk-test-integration-key", CODERS_OAUTH_TOKEN: "" } });
+    expect(JSON.parse(out)).toMatchObject({
+      authenticated: true,
+      source: "env:ANTHROPIC_API_KEY",
+      isOAuth: false,
+      provider: "firstParty",
+    });
   });
 });
 

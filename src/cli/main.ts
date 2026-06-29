@@ -518,8 +518,11 @@ export async function main(): Promise<void> {
       }
 
       // Human-readable output
+      console.log("Authentication Status");
+      console.log("---------------------");
+
       if (!resolved) {
-        console.log("Not authenticated.");
+        console.log("  Status:    Not authenticated");
         console.log("");
         console.log("To authenticate, either:");
         console.log("  1. Run: coders auth login");
@@ -527,8 +530,6 @@ export async function main(): Promise<void> {
         return;
       }
 
-      console.log("Authentication Status");
-      console.log("---------------------");
       console.log(`  Status:    Authenticated`);
       console.log(`  Source:    ${formatSource(resolved.source)}`);
       console.log(`  API key:   ${maskApiKey(resolved.apiKey)}`);

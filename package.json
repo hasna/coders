@@ -1,11 +1,11 @@
 {
   "name": "@hasna/coders",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "Open-source coding agent CLI with native @hasna/* ecosystem integration",
   "type": "module",
   "bin": {
-    "coders": "./dist/cli.js",
-    "coders-mcp": "./dist/coders-mcp.js"
+    "coders": "dist/cli.js",
+    "coders-mcp": "dist/coders-mcp.js"
   },
   "scripts": {
     "build": "tsx esbuild.config.ts",
@@ -16,6 +16,10 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
+    "no-cloud:source": "vitest run src/no-cloud-boundary.test.ts",
+    "no-cloud:pack": "npm run build && node scripts/no-cloud-artifact-scan.mjs",
+    "prepack": "npm run build && node scripts/no-cloud-artifact-scan.mjs",
+    "prepublishOnly": "npm test && npm run build && node scripts/no-cloud-artifact-scan.mjs",
     "clean": "rm -rf dist/",
     "postinstall": "mkdir -p $HOME/.hasna/coders 2>/dev/null || true"
   },
@@ -46,7 +50,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/coders.git"
+    "url": "git+https://github.com/hasna/coders.git"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -54,7 +58,6 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
-    "@hasna/cloud": "0.1.24",
     "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "axios": "1.13.6",

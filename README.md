@@ -17,19 +17,13 @@ npm install -g @hasna/coders
 coders --help
 ```
 
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
-
-```bash
-cloud setup
-cloud sync push --service coders
-cloud sync pull --service coders
-```
-
 ## Data Directory
 
-Data is stored in `~/.hasna/coders/`.
+Data is stored locally in `~/.hasna/coders/`.
+
+Set `CODERS_DB_PATH` to use a specific SQLite database path. Coders-owned
+PostgreSQL migration helpers live in this package for future remote storage
+adapters; the package does not depend on the retired shared cloud runtime.
 
 ## License
 
