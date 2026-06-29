@@ -1,6 +1,6 @@
 {
   "name": "@hasna/coders",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "description": "Open-source coding agent CLI with native @hasna/* ecosystem integration",
   "type": "module",
   "bin": {
@@ -91,8 +91,6 @@
     "@hasna/prompts": "*",
     "@hasna/recordings": "*",
     "@hasna/sandboxes": "*",
-    "@hasna/economy": "*",
-    "@hasna/wallets": "*",
     "@hasna/brains": "*",
     "@hasna/attachments": "*"
   }
