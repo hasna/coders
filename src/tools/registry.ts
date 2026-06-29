@@ -9,7 +9,7 @@
  *   - Enable/disable tools
  *   - Get tool definitions for API
  */
-import type { Tool, ToolResultBlockParam } from "./interface.js";
+import type { Tool } from "./interface.js";
 import type { ToolDefinition } from "../api/client.js";
 import { READ_ONLY_TOOLS, WRITE_TOOLS } from "../core/constants.js";
 

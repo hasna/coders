@@ -9,12 +9,10 @@
  *   - Validates old_string uniqueness
  */
 import { readFileSync, writeFileSync, existsSync, statSync } from "fs";
-import { dirname } from "path";
-import { mkdirSync } from "fs";
 import { resolve, isAbsolute } from "path";
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import { EDIT_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 import { hasFileBeenRead, markFileAsRead } from "./read.js";
 import { dbRun } from "../../db/index.js";
@@ -126,11 +124,11 @@ export const editTool: Tool<EditInput, EditOutput> = {
     return { result: true };
   },
 
-  async checkPermissions(input) {
+  async checkPermissions(_input) {
     return { behavior: "passthrough" };
   },
 
-  async call(input, context): Promise<ToolCallResult<EditOutput>> {
+  async call(input, _context): Promise<ToolCallResult<EditOutput>> {
     if (!input.file_path || typeof input.file_path !== "string") {
       return { data: { filePath: "", oldString: "", newString: "", replacements: 0, originalFile: "" } };
     }

@@ -49,7 +49,7 @@ export const READ_MCP_RESOURCE_TOOL = "ReadMcpResourceTool" as const;
 export const SKILL_TOOL = "Skill" as const;
 
 // Read-only tools (safe for speculation and plan mode)
-export const READ_ONLY_TOOLS = new Set([
+export const READ_ONLY_TOOLS = new Set<string>([
   READ_TOOL,
   GLOB_TOOL,
   GREP_TOOL,
@@ -63,7 +63,7 @@ export const READ_ONLY_TOOLS = new Set([
 ]);
 
 // Write-class tools
-export const WRITE_TOOLS = new Set([EDIT_TOOL, WRITE_TOOL, NOTEBOOK_EDIT_TOOL]);
+export const WRITE_TOOLS = new Set<string>([EDIT_TOOL, WRITE_TOOL, NOTEBOOK_EDIT_TOOL]);
 
 // Config paths
 export const CONFIG_DIR_ENV = "CODERS_CONFIG_DIR";

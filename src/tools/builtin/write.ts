@@ -11,7 +11,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from "fs";
 import { dirname, resolve, isAbsolute } from "path";
 import { randomUUID } from "crypto";
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import { WRITE_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 import { hasFileBeenRead, markFileAsRead } from "./read.js";
 import { dbRun } from "../../db/index.js";
@@ -89,11 +89,11 @@ export const writeTool: Tool<WriteInput, WriteOutput> = {
     return { result: true };
   },
 
-  async checkPermissions(input) {
+  async checkPermissions(_input) {
     return { behavior: "passthrough" };
   },
 
-  async call(input, context): Promise<ToolCallResult<WriteOutput>> {
+  async call(input, _context): Promise<ToolCallResult<WriteOutput>> {
     if (!input.file_path || typeof input.file_path !== "string") {
       return { data: { filePath: "", bytesWritten: 0, created: false } };
     }

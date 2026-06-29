@@ -21,7 +21,7 @@ export class VertexAdapter implements ProviderAdapter {
       ?? `https://${this.region}-aiplatform.googleapis.com`;
   }
 
-  buildHeaders(apiKey: string, isOAuth: boolean): Record<string, string> {
+  buildHeaders(apiKey: string, _isOAuth: boolean): Record<string, string> {
     return {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${apiKey}`,

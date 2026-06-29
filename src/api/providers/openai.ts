@@ -12,7 +12,7 @@
 import type { ProviderAdapter } from "./interface.js";
 
 export class OpenAIAdapter implements ProviderAdapter {
-  readonly name = "openai";
+  readonly name: string = "openai";
   readonly baseUrl: string;
 
   constructor(baseUrl?: string) {

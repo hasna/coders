@@ -19,7 +19,7 @@ export class BedrockAdapter implements ProviderAdapter {
       ?? `https://bedrock-runtime.${this.region}.amazonaws.com`;
   }
 
-  buildHeaders(apiKey: string, isOAuth: boolean): Record<string, string> {
+  buildHeaders(_apiKey: string, _isOAuth: boolean): Record<string, string> {
     // Bedrock uses AWS Signature V4, not API keys directly
     // The actual signing happens at the HTTP client level
     return {

@@ -13,7 +13,7 @@
  */
 import { resolveApiKey, getApiProvider, type ApiProvider, type ResolvedApiKey } from "../auth/api-key.js";
 import { VERSION } from "../core/constants.js";
-import { resolveModelId, getContextWindow, hasExtendedContext } from "./models.js";
+import { resolveModelId } from "./models.js";
 import {
   parseSSEStream,
   accumulateStream,
@@ -344,7 +344,12 @@ export class ApiClient {
   // ── Usage tracking ─────────────────────────────────────────────
 
   private trackUsage(
-    usage: { input_tokens: number; output_tokens: number },
+    usage: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    },
     durationMs: number,
     model?: string,
   ): void {

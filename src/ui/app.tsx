@@ -12,7 +12,6 @@
  */
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import { render, Box, Text, Static, useApp, useInput, useStdout } from "ink";
-import { execSync } from "child_process";
 import { VERSION } from "../cli/index.js";
 import { resolveApiKey } from "../auth/api-key.js";
 import { getSettings } from "../config/loader.js";
@@ -26,7 +25,7 @@ import { dashboardEvents } from "../web/events.js";
 import { renderMarkdown } from "./components/markdown.js";
 import { runAgentLoop, type ToolHandler, type ToolResult } from "../core/agent-loop.js";
 import { createDefaultPermissionContext, checkToolPermission, type PermissionResult } from "../config/permissions.js";
-import { dbRun } from "../db/index.js";
+import { dbAll, dbRun } from "../db/index.js";
 import {
   getRunningTasks,
   getRecentlyCompletedTasks,
@@ -766,7 +765,7 @@ function ToolItem({ tool, verbose }: { tool: ToolDisplay; verbose?: boolean }) {
 
 // ── Full-screen Dialog Component ──────────────────────────────────
 
-function FullScreenDialog({ title, hint, items, selectedIndex, cols, rows }: {
+export function FullScreenDialog({ title, hint, items, selectedIndex, cols, rows }: {
   title: string;
   hint?: string;
   items: Array<{ label: string; detail?: string; current?: boolean }>;
@@ -963,8 +962,8 @@ function App({ model: initialModel, mode: initialMode, dangerouslySkipPermission
   const [theme, setTheme] = useState<Theme>(getTheme("default"));
   const [effort, setEffort] = useState<"low" | "medium" | "high">("high");
   const [verbose, setVerbose] = useState(false);
-  const [transcriptMode, setTranscriptMode] = useState(false);
-  const [vimMode, setVimMode] = useState(false);
+  const [, setTranscriptMode] = useState(false);
+  const [, setVimMode] = useState(false);
   // Interactive status line picker state
   type PickerType = "model" | "mode" | "effort" | "theme" | null;
   const [activePicker, setActivePicker] = useState<PickerType>(null);
@@ -1140,7 +1139,7 @@ function App({ model: initialModel, mode: initialMode, dangerouslySkipPermission
   }, { isActive: !!permissionPending });
 
   // Handle AskUserQuestion dialog key presses
-  useInput((ch, key) => {
+  useInput((_ch, key) => {
     if (!questionPending) return;
     const q = questionPending;
     const opts = q.questions[q.activeQuestion]?.options ?? [];
@@ -2141,7 +2140,7 @@ function App({ model: initialModel, mode: initialMode, dangerouslySkipPermission
           const currentId = sessionRef.current?.id;
           return (
             <Box flexDirection="column" paddingLeft={1}>
-              <Box justifyContent="space-between" width={w}>
+              <Box justifyContent="space-between" width={Math.min(cols - 4, 70)}>
                 <Text bold>Sessions</Text>
                 <Text dimColor>esc</Text>
               </Box>
@@ -2387,8 +2386,6 @@ export function launchInkApp(opts: {
   mcpReady.then((mcpToolHandlers) => {
     // Redirect console.warn/error to a log file instead of suppressing
     // (they corrupt the Ink UI if printed to stdout)
-    const _origWarn = console.warn;
-    const _origError = console.error;
     const logBuffer: string[] = [];
     console.warn = (...args: unknown[]) => { logBuffer.push(`[warn] ${args.join(" ")}`); };
     console.error = (...args: unknown[]) => { logBuffer.push(`[error] ${args.join(" ")}`); };

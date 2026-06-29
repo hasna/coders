@@ -280,7 +280,8 @@ export const agentTool: Tool<AgentInput, AgentOutput> = {
       if (worktreePath) {
         try {
           const { execSync } = require("child_process");
-          process.chdir(context.options?.projectDir ?? process.env.HOME ?? "/");
+          const projectDir = context.options?.projectDir;
+          process.chdir(typeof projectDir === "string" ? projectDir : process.env.HOME ?? "/");
           execSync(`git worktree remove ${worktreePath} --force`, { stdio: "pipe", timeout: 10000 });
           if (worktreeBranch) execSync(`git branch -D ${worktreeBranch}`, { stdio: "pipe", timeout: 5000 });
         } catch { /* best effort cleanup */ }

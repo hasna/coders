@@ -244,7 +244,7 @@ function wrapMcpTool(serverName: string, mcpTool: McpToolDef, client: Client): T
       return `${serverName} ${mcpTool.name} ${JSON.stringify(input).slice(0, 100)}`;
     },
 
-    async checkPermissions(input: Record<string, unknown>) {
+    async checkPermissions(_input: Record<string, unknown>) {
       return { behavior: "ask" as const, message: `Run MCP tool ${serverName}/${mcpTool.name}?` };
     },
     async validateInput() { return { result: true }; },

@@ -16,8 +16,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { resolve, isAbsolute } from "path";
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
-import { RipgrepTimeoutError } from "../../core/errors.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import { GREP_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 
 // ── Schemas ────────────────────────────────────────────────────────
@@ -154,7 +153,7 @@ export const grepTool: Tool<GrepInput, GrepOutput> = {
     return { behavior: "allow", updatedInput: input };
   },
 
-  async call(input, context): Promise<ToolCallResult<GrepOutput>> {
+  async call(input, _context): Promise<ToolCallResult<GrepOutput>> {
     const rg = getRg();
     const searchPath = input.path ? resolvePath(input.path) : process.cwd();
     const outputMode = input.output_mode ?? "files_with_matches";

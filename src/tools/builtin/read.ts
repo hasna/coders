@@ -14,8 +14,7 @@
 import { readFileSync, statSync, existsSync } from "fs";
 import { extname, isAbsolute, resolve } from "path";
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
-import type { PermissionResult } from "../../config/permissions.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import { READ_TOOL, DEFAULT_READ_LINE_LIMIT, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 
 // ── Track which files have been read ───────────────────────────────
@@ -131,7 +130,7 @@ export const readTool: Tool<ReadInput, ReadOutput> = {
     return { behavior: "allow", updatedInput: input };
   },
 
-  async call(input, context): Promise<ToolCallResult<ReadOutput>> {
+  async call(input, _context): Promise<ToolCallResult<ReadOutput>> {
     if (!input.file_path || typeof input.file_path !== "string") {
       return { data: { content: "Error: file_path is required", filePath: "", totalLines: 0, linesRead: 0, startLine: 0 } };
     }
@@ -215,7 +214,7 @@ function readTextFile(filePath: string, input: ReadInput): ToolCallResult<ReadOu
 
 // ── Image file reading ─────────────────────────────────────────────
 
-function readImageFile(filePath: string, input: ReadInput): ToolCallResult<ReadOutput> {
+function readImageFile(filePath: string, _input: ReadInput): ToolCallResult<ReadOutput> {
   const stat = statSync(filePath);
   const ext = extname(filePath).toLowerCase();
 

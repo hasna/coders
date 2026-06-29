@@ -11,7 +11,7 @@ import fg from "fast-glob";
 import { statSync, existsSync } from "fs";
 import { resolve, isAbsolute } from "path";
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import { GLOB_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 
 // ── Schemas ────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ export const globTool: Tool<GlobInput, GlobOutput> = {
     return { behavior: "allow", updatedInput: input };
   },
 
-  async call(input, context): Promise<ToolCallResult<GlobOutput>> {
+  async call(input, _context): Promise<ToolCallResult<GlobOutput>> {
     const cwd = input.path ? resolvePath(input.path) : process.cwd();
 
     // Validate that the search directory exists before attempting glob

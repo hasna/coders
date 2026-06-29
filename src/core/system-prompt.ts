@@ -12,8 +12,6 @@
  * Uses ephemeral cache blocks for long-lived sections.
  */
 import { buildInstructionsPrompt } from "../memory/files.js";
-import type { ToolPermissionContext } from "../config/permissions.js";
-import type { Tool } from "../tools/interface.js";
 import { discoverSkills } from "../tools/builtin/skill.js";
 
 // ── Types ──────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
  * WebFetch tool — fetch URL content and convert to text
  */
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import { WEB_FETCH_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 
 const WebFetchInputSchema = z.strictObject({

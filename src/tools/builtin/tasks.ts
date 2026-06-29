@@ -5,7 +5,7 @@
  * These match Claude Code's 25-tools-task.js interface.
  */
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import {
   TASK_CREATE_TOOL,
   TASK_GET_TOOL,
@@ -13,7 +13,7 @@ import {
   TASK_UPDATE_TOOL,
   DEFAULT_MAX_RESULT_SIZE_CHARS,
 } from "../../core/constants.js";
-import { getTodosIntegration, type Task, type TaskStatus } from "../../integrations/todos.js";
+import { getTodosIntegration, type Task } from "../../integrations/todos.js";
 
 // ── Shared schema pieces ───────────────────────────────────────────
 

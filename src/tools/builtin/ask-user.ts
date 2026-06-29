@@ -5,7 +5,7 @@
  * Used during planning and requirement clarification.
  */
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import { ASK_USER_QUESTION_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 
 // ── Schemas ────────────────────────────────────────────────────────

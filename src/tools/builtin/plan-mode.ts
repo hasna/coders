@@ -4,11 +4,10 @@
  * EnterPlanMode: switches to read-only plan mode for exploration/design
  * ExitPlanMode: reads plan from file, presents for user approval, restores mode
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
-import type { PermissionResult } from "../../config/permissions.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import { enterPlanMode, exitPlanMode } from "../../config/permissions.js";
 import { ENTER_PLAN_MODE_TOOL, EXIT_PLAN_MODE_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 import { getPlansDir } from "../../config/paths.js";
@@ -61,7 +60,7 @@ export const enterPlanModeTool: Tool<Record<string, never>, { message: string }>
 
   async validateInput() { return { result: true }; },
 
-  async call(input, context): Promise<ToolCallResult<{ message: string }>> {
+  async call(_input, context): Promise<ToolCallResult<{ message: string }>> {
     if (context.agentId) {
       throw new Error("EnterPlanMode cannot be used in agent contexts");
     }
@@ -135,7 +134,7 @@ export const exitPlanModeTool: Tool<Record<string, never>, ExitPlanOutput> = {
 
   requiresUserInteraction() { return true; },
 
-  async validateInput(input, context) {
+  async validateInput(_input, context) {
     const mode = context?.getAppState?.()?.toolPermissionContext?.mode;
     if (mode !== "plan") {
       return {
@@ -151,7 +150,7 @@ export const exitPlanModeTool: Tool<Record<string, never>, ExitPlanOutput> = {
     return { behavior: "ask", message: "Exit plan mode?", updatedInput: input };
   },
 
-  async call(input, context): Promise<ToolCallResult<ExitPlanOutput>> {
+  async call(_input, context): Promise<ToolCallResult<ExitPlanOutput>> {
     const isAgent = !!context.agentId;
     const plan = readPlanFile(context.agentId);
     const filePath = getPlanFilePath(context.agentId);

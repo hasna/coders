@@ -17,6 +17,7 @@ import {
 import { VERSION } from "../cli/index.js";
 import { getEnabledTools, getTool } from "../tools/registry.js";
 import { getDb } from "../db/index.js";
+import type { AppState, ToolContext } from "../tools/interface.js";
 
 // ── Agent registry (in-memory) ─────────────────────────────────────
 const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>();
@@ -188,8 +189,8 @@ export async function runMcpServer(options: McpServerOptions = {}): Promise<void
 
 // ── Minimal tool context for MCP calls ─────────────────────────────
 
-function createMcpToolContext() {
-  const state = {
+function createMcpToolContext(): ToolContext {
+  const state: AppState = {
     toolPermissionContext: { mode: "bypassPermissions" as const, allowRules: [], denyRules: [] },
     verbose: false,
     expandedView: undefined,
@@ -198,7 +199,7 @@ function createMcpToolContext() {
   return {
     abortController: new AbortController(),
     getAppState: () => state,
-    setAppState: (updater: (s: typeof state) => typeof state) => {
+    setAppState: (updater) => {
       Object.assign(state, updater(state));
     },
     options: {
@@ -213,7 +214,7 @@ function createMcpToolContext() {
 
 // ── Schema conversion ──────────────────────────────────────────────
 
-function schemaToJsonSchema(schema: unknown): Record<string, unknown> {
+function schemaToJsonSchema(schema: unknown): McpTool["inputSchema"] {
   // Try Zod's toJsonSchema if available
   try {
     const s = schema as { _def?: unknown };

@@ -200,7 +200,7 @@ export const enterWorktreeTool = simpleTool({
   inputSchema: z.strictObject({ name: z.string().optional().describe("Worktree name") }),
   readOnly: false, concurrent: false, defer: true,
   prompt: "Create a git worktree for isolated work. Only use when user explicitly asks for a worktree.",
-  async call(input) {
+  async call(_input) {
     return { data: { worktreePath: "", worktreeBranch: "", message: "Worktree creation not yet implemented" }, error: "EnterWorktree is not yet implemented. Use `git worktree add` via Bash instead." };
   },
   mapResult(result: any, id) {

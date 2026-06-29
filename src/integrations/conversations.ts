@@ -192,7 +192,7 @@ export class ConversationsIntegration {
         project_id: this.projectId,
         from: this.agentName,
       });
-      return { name: result.name ?? name, description: result.description, projectId: this.projectId };
+      return { name: String(result.name ?? name), description: result.description as string | undefined, projectId: this.projectId };
     }
 
     const space: Space = { name, description, projectId: this.projectId };
@@ -320,6 +320,10 @@ export function getConversationsIntegration(options?: {
     throw new Error("ConversationsIntegration not initialized. Call with options first.");
   }
   return _instance;
+}
+
+export async function sendMessage(to: string, content: string, priority: "normal" | "high" = "normal"): Promise<AgentMessage> {
+  return getConversationsIntegration().sendMessage(to, content, priority);
 }
 
 export function resetConversationsIntegration(): void {

@@ -761,17 +761,20 @@ function registerDefaults(): void {
       const sessionId = getCurrentSessionId();
       if (!sessionId) return { output: "No active session." };
       try {
-        const rows = dbAll<any>(
+        const filesRead = new Set<string>();
+        const filesWritten = new Set<string>();
+        const checkpointRows = dbAll<any>(
           `SELECT DISTINCT file_path, edit_operation FROM checkpoints WHERE session_id = ? ORDER BY created_at DESC LIMIT 50`,
           [sessionId],
         );
+        for (const row of checkpointRows) {
+          if (row.file_path) filesWritten.add(String(row.file_path));
+        }
         // Also check messages for tool_uses referencing files
         const msgRows = dbAll<any>(
           `SELECT tool_uses FROM messages WHERE session_id = ? AND tool_uses IS NOT NULL`,
           [sessionId],
         );
-        const filesRead = new Set<string>();
-        const filesWritten = new Set<string>();
         for (const r of msgRows) {
           try {
             const uses = JSON.parse(r.tool_uses);

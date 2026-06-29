@@ -3,7 +3,7 @@
  */
 import { execSync } from "child_process";
 import { existsSync } from "fs";
-import { join, resolve } from "path";
+import { join } from "path";
 
 export interface GitRepo {
   root: string;

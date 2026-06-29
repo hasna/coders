@@ -5,7 +5,6 @@
  * but defined cleanly with proper types.
  */
 import { z } from "zod";
-import type { PermissionMode } from "../core/constants.js";
 
 // ── Hook schema ────────────────────────────────────────────────────
 

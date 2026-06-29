@@ -12,8 +12,7 @@
  */
 import { spawn, type ChildProcess } from "child_process";
 import { z } from "zod";
-import type { Tool, ToolContext, ToolCallResult, ToolResultBlockParam, ValidationResult } from "../interface.js";
-import type { PermissionResult } from "../../config/permissions.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import {
   DEFAULT_BASH_TIMEOUT_MS,
   MAX_BASH_TIMEOUT_MS,
@@ -396,7 +395,6 @@ function hasOutputRedirection(command: string): boolean {
 // ── Background task tracking ───────────────────────────────────────
 
 const backgroundTasks = new Map<string, { process: ChildProcess; output: string; done: boolean; exitCode: number | null }>();
-let nextBgId = 1;
 
 // ── Bash Tool Implementation ───────────────────────────────────────
 
@@ -469,7 +467,7 @@ export const bashTool: Tool<BashInput, BashOutput> = {
     return { result: true };
   },
 
-  async checkPermissions(input, context) {
+  async checkPermissions(input, _context) {
     const cmd = input.command;
 
     // Read-only commands get auto-approved in permissive modes

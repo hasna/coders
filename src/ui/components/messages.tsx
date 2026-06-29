@@ -4,9 +4,7 @@
  * Displays user messages (❯ prefix), assistant messages (markdown),
  * tool uses (⎿ connector with status), and system messages.
  */
-import React from "react";
 import { Box, Text } from "ink";
-import { renderMarkdown } from "./markdown.js";
 
 // ── Types ──────────────────────────────────────────────────────────
 

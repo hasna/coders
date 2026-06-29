@@ -4,7 +4,7 @@
  * Sends a search query to the API which uses the built-in web_search tool.
  */
 import { z } from "zod";
-import type { Tool, ToolCallResult, ToolResultBlockParam } from "../interface.js";
+import type { Tool, ToolCallResult } from "../interface.js";
 import { WEB_SEARCH_TOOL, DEFAULT_MAX_RESULT_SIZE_CHARS } from "../../core/constants.js";
 
 const WebSearchInputSchema = z.strictObject({
@@ -42,7 +42,7 @@ export const webSearchTool: Tool<WebSearchInput, WebSearchOutput> = {
     }
     return { result: true };
   },
-  async checkPermissions(input) { return { behavior: "passthrough" }; },
+  async checkPermissions(_input) { return { behavior: "passthrough" }; },
 
   async call(input, context): Promise<ToolCallResult<WebSearchOutput>> {
     // WebSearch works by making an API call with web_search tool enabled

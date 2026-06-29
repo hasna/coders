@@ -4,7 +4,6 @@
  * Green for added lines (+), red for removed (-).
  * File path header, line numbers, collapsible for large diffs.
  */
-import React from "react";
 import { Box, Text } from "ink";
 
 interface DiffViewProps {

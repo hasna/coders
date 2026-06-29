@@ -66,7 +66,6 @@ const DEFAULT_COMPACTION_THRESHOLD = 0.80;
 const DEFAULT_PRESERVE_RECENT_TURNS = 10;
 
 export class ContextManager {
-  private model: string;
   private contextWindowSize: number;
   private compactionThreshold: number;
   private preserveRecentTurns: number;
@@ -76,7 +75,6 @@ export class ContextManager {
   private onCompaction?: (result: CompactionResult) => void;
 
   constructor(options: ContextManagerOptions) {
-    this.model = options.model;
     this.contextWindowSize = options.contextWindowOverride ?? getContextWindow(options.model);
     this.compactionThreshold = options.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
     this.preserveRecentTurns = options.preserveRecentTurns ?? DEFAULT_PRESERVE_RECENT_TURNS;
@@ -160,7 +158,6 @@ export class ContextManager {
    * Update the model (changes context window size).
    */
   setModel(model: string): void {
-    this.model = model;
     this.contextWindowSize = getContextWindow(model);
   }
 
@@ -190,7 +187,7 @@ export function estimateMessageTokens(messages: Message[]): number {
     } else if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
         if (typeof block === "object" && block !== null) {
-          const b = block as Record<string, unknown>;
+          const b = block as unknown as Record<string, unknown>;
           if (b.type === "text") totalChars += String(b.text ?? "").length;
           else if (b.type === "thinking") totalChars += String(b.thinking ?? "").length;
           else if (b.type === "tool_use") totalChars += JSON.stringify(b.input ?? {}).length + String(b.name ?? "").length;
@@ -233,7 +230,7 @@ function createContextSummary(messages: Message[]): string {
       }
     } else if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
-        const b = block as Record<string, unknown>;
+        const b = block as unknown as Record<string, unknown>;
         if (b.type === "tool_use") {
           toolUsesCount++;
           const name = b.name as string;

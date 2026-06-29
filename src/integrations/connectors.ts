@@ -203,7 +203,7 @@ function createConnectorTool(
       return `${connector.name} ${action.name} ${JSON.stringify(input).slice(0, 100)}`;
     },
 
-    async checkPermissions(input: Record<string, unknown>) {
+    async checkPermissions(_input: Record<string, unknown>) {
       return { behavior: "ask" as const, message: `Execute ${connector.name}.${action.name}?` };
     },
 

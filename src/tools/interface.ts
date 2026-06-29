@@ -62,6 +62,7 @@ export interface ValidationResult {
 
 export interface ToolCallResult<T = unknown> {
   data: T;
+  error?: string;
 }
 
 // ── Tool Result Block (API format) ─────────────────────────────────
@@ -98,10 +99,10 @@ export interface Tool<TInput = Record<string, unknown>, TOutput = unknown> {
   prompt(input?: TInput): Promise<string> | string;
 
   /** Zod input schema (lazy-initialized) */
-  readonly inputSchema: z.ZodType<TInput>;
+  readonly inputSchema: z.ZodTypeAny;
 
   /** Zod output schema (lazy-initialized) */
-  readonly outputSchema: z.ZodType<TOutput>;
+  readonly outputSchema: z.ZodTypeAny;
 
   /** Display name for UI */
   userFacingName(input?: TInput): string;

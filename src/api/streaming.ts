@@ -26,7 +26,12 @@ export interface StreamEvent {
     type: "message";
     role: "assistant";
     model: string;
-    usage: { input_tokens: number; output_tokens: number };
+    usage: {
+      input_tokens: number;
+      output_tokens: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    };
     content: ContentBlock[];
     stop_reason: string | null;
   };
@@ -44,6 +49,7 @@ export type ContentBlock =
   | TextBlock
   | ThinkingBlock
   | ToolUseBlock
+  | ToolResultBlock
   | ServerToolUseBlock
   | WebSearchToolResultBlock;
 
@@ -66,6 +72,13 @@ export interface ToolUseBlock {
   _inputParseFailed?: boolean;
   /** Raw accumulated JSON string, retained when parsing fails for diagnostics */
   _rawInputJson?: string;
+}
+
+export interface ToolResultBlock {
+  type: "tool_result";
+  tool_use_id: string;
+  content: string;
+  is_error?: boolean;
 }
 
 export interface ServerToolUseBlock {
@@ -193,7 +206,6 @@ export async function* accumulateStream(
     content: [],
     usage: { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
   };
-  let currentBlockIndex = -1;
   const jsonAccumulators = new Map<number, string>();
 
   for await (const event of events) {
@@ -217,7 +229,6 @@ export async function* accumulateStream(
 
       case "content_block_start": {
         if (event.content_block && event.index !== undefined) {
-          currentBlockIndex = event.index;
           jsonAccumulators.set(event.index, "");
           accumulated.content.push({ ...event.content_block });
         }

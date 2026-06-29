@@ -11,7 +11,7 @@
  * Also detects conflicts (e.g., both API key and OAuth set).
  */
 import { getConfig, saveConfig } from "../config/loader.js";
-import { getKeychainApiKey, setKeychainApiKey, removeKeychainApiKey } from "./keychain.js";
+import { getKeychainApiKey, removeKeychainApiKey } from "./keychain.js";
 
 export type ApiKeySource =
   | "env:CODERS_OAUTH_TOKEN"

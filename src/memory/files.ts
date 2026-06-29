@@ -6,7 +6,7 @@
  * Strips HTML comments, warns on external includes.
  */
 import { readFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
+import { join } from "path";
 import { getInstructionsFilePath, getConfigDir } from "../config/paths.js";
 
 let _cache = new Map<string, string>();

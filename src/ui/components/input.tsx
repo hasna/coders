@@ -7,7 +7,7 @@
  *   - Command history (up/down)
  *   - Slash command detection
  */
-import React, { useState, useCallback } from "react";
+import { useState } from "react";
 import { Box, Text, useInput } from "ink";
 
 const PROMPT_CHAR = "❯";
